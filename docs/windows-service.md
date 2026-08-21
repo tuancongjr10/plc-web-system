@@ -2,14 +2,35 @@
 
 ## Production architecture
 
-Windows SCM starts **PLC Web System** through WinSW. WinSW launches one production `node.exe` process in `backend`, which serves the API, WebSocket `/ws`, and the compiled Vue SPA from `frontend/dist` on `0.0.0.0:80`. Vite, a reverse proxy, and port 5173 are not used in production.
+Windows SCM starts **PLC Web System** through WinSW. WinSW launches one production `node.exe` process in `backend`, which serves the API, WebSocket `/ws`, and compiled Vue SPA from `frontend/dist` on `0.0.0.0:80`.
 
-The selected wrapper is **WinSW x64 2.12.0**, the latest stable release published by the WinSW project. It wraps an arbitrary executable, so its Node compatibility does not depend on Node module APIs. The installed Node version is `v24.19.0`.
+Production does not use Vite, nodemon, a reverse proxy, port 5173, or a manually opened PowerShell window.
+
+```text
+Windows boot
+→ WinSW service: PLC Web System
+→ Node.js production server
+→ Vue SPA + /api + /ws
+→ PLC TCP reconnect/telemetry
+→ http://robolinks-tcjr
+```
+
+The selected wrapper is **WinSW x64 2.12.0**. The installed Node version used during deployment was `v24.19.0`.
 
 - Release: https://github.com/winsw/winsw/releases/tag/v2.12.0
 - XML/service options: https://github.com/winsw/winsw/blob/v2.12.0/doc/xmlConfigFile.md
 - Wrapper SHA-256: `05B82D46AD331CC16BDC00DE5C6332C1EF818DF8CEEFCD49C726553209B3A0DA`
-- Note: the official release asset is not Authenticode-signed; it was downloaded from the official release URL and its version/hash are pinned above.
+
+## Current production endpoint
+
+- Friendly hostname: `ROBOLINKS-TCJR`
+- Friendly URL: `http://robolinks-tcjr`
+- Server LAN IP: `192.168.0.100`
+- Technical fallback URL: `http://192.168.0.100`
+- Listener: `0.0.0.0:80`
+- PLC: `192.168.0.1:2000`
+
+The hostname rename and manual reboot have been completed successfully. `http://robolinks-tcjr` is the primary operator URL on the trusted TP-Link LAN.
 
 ## Build and direct production start
 
@@ -21,20 +42,11 @@ npm.cmd test
 npm.cmd start
 ```
 
-`npm start` runs `node scripts/start-production.js`, which sets production mode and starts the Node application without nodemon or Vite.
-
-Production URLs:
-
-- Local: `http://localhost`
-- Friendly URL after the pending hostname reboot: `http://robolinks-tcjr`
-- Current TP-Link/Wi-Fi address: `http://192.168.1.212`
-- Current secondary address: `http://192.168.0.241`
-
-The LAN URLs may change until the ThinkPad receives its separately planned static IP.
+`npm start` runs `node scripts/start-production.js`, which sets production mode and starts the Node application without nodemon or Vite. If `PORT` is not already configured, the production entrypoint defaults to port 80.
 
 ## Service commands
 
-Run these from an Administrator terminal in `D:\plc-web-system-export\backend`:
+Run from an Administrator terminal in `D:\plc-web-system-export\backend`:
 
 ```powershell
 npm.cmd run service:install
@@ -44,7 +56,7 @@ npm.cmd run service:stop
 npm.cmd run service:uninstall
 ```
 
-The complete idempotent install checkpoint, including ACLs and the firewall rule, is:
+The complete install checkpoint, including ACLs and firewall setup, is:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-service-checkpoint.ps1
@@ -62,72 +74,93 @@ Service configuration:
 
 ## Service account and printers
 
-LocalService was selected instead of LocalSystem to reduce privileges. It can run the web server, access the SQLite/database directories granted by the deployment script, and open the unauthenticated PLC TCP connection.
+LocalService is used to reduce privileges. It can run the web server, access the SQLite/runtime directories granted by the deployment scripts, and open the PLC TCP connection.
 
-LocalService does not share the interactive user's profile or per-user printer queues. A future real Godex/Zebra/TSC queue must be installed machine-wide with a driver accessible to LocalService, then verified under the service account. Microsoft Print to PDF Save-As is interactive and is not a supported production queue. PDF to Trace QR remains independent of desktop sessions and printers because the browser downloads the generated PDF directly.
+LocalService does not share the interactive user's profile or per-user printer queues. A real Godex/Zebra/TSC printer queue must therefore be installed machine-wide and verified as visible to the service account.
+
+`Microsoft Print to PDF` Save-As is interactive and is not a supported production printer workflow under Session 0. **PDF → Trace QR** is independent of desktop sessions and printer queues because the generated QR PDF is returned to the browser for download.
 
 ## Fixed runtime paths
 
 - Environment: `D:\plc-web-system-export\backend\.env`
 - Runtime database: `D:\plc-web-system-export\backend\database\plc_system.db`
-- Deployment backup: `D:\plc-web-system-export\backend\database\backups\plc_system-20260821-1136-service-checkpoint.db`
+- Database backups: `D:\plc-web-system-export\backend\database\backups`
 - Application logs: `D:\plc-web-system-export\backend\logs\app.log` and `app-error.log`
 - WinSW logs: `D:\plc-web-system-export\backend\logs\service\PLCWebSystem.wrapper.log`, `.out.log`, `.err.log`
 - Label temp: `D:\plc-web-system-export\backend\tmp\service\plc-web-system\labels`
 - Scanner uploads: `D:\plc-web-system-export\backend\uploads\scans`
-- Frontend: `D:\plc-web-system-export\frontend\dist`
-- Trace QR: generated in memory and downloaded by the operator's browser; no server-side Downloads path
+- Frontend production assets: `D:\plc-web-system-export\frontend\dist`
+- Trace QR: generated by backend and downloaded by the operator's browser; no server-side Downloads path is required
 
-All application paths are resolved from the project/backend location, not the shell current directory.
+Application paths are resolved from the project/backend location rather than depending on a PowerShell current directory.
 
 ## Friendly hostname
 
-The computer rename is prepared without an automatic reboot. Run from an Administrator terminal:
+Current hostname:
 
-```powershell
-npm.cmd run hostname:prepare
+```text
+ROBOLINKS-TCJR
 ```
 
-Equivalent native command:
+Primary URL:
 
-```powershell
-Rename-Computer -NewName "robolinks-tcjr" -Force
+```text
+http://robolinks-tcjr
 ```
 
-The active hostname remains unchanged until an authorized manual Windows reboot. No IP adapter settings are changed.
+The rename command used during deployment was:
+
+```powershell
+Rename-Computer -NewName "ROBOLINKS-TCJR" -Force
+```
+
+The rename became active after an authorized manual reboot.
 
 ## Firewall and TP-Link network profile
 
-The installed firewall rule allows inbound TCP 80 on the Private profile only:
+Production firewall rule:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\configure-firewall-private.ps1
+New-NetFirewallRule -DisplayName "PLC Web System TCP 80 (Private)" `
+  -Direction Inbound -Action Allow -Protocol TCP -LocalPort 80 -Profile Private
 ```
 
-Equivalent Administrator command:
-
-```powershell
-New-NetFirewallRule -DisplayName "PLC Web System TCP 80 (Private)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 80 -Profile Private
-```
-
-At the friendly-URL checkpoint, `TP-Link_6F86` reports Windows NetworkCategory `Private`, so the TCP 80 rule applies. The deployment scripts do not change the network profile. If Windows later classifies this trusted factory network as Public, an administrator can restore it deliberately:
+The trusted TP-Link network must be classified as `Private` in Windows. If necessary while connected to that trusted LAN:
 
 ```powershell
 Set-NetConnectionProfile -Name "TP-Link_6F86" -NetworkCategory Private
 ```
 
-This changes the Windows trust profile only; it does not change the adapter IP. Apply it only while connected to the trusted factory TP-Link network.
+This only changes the Windows trust profile; it does not change the adapter IP.
 
-## Reboot checklist (do not reboot automatically)
+## Runtime verification
 
-After an authorized manual reboot:
+After a Windows reboot, no backend/frontend terminal should be started manually.
 
-1. Confirm `$env:COMPUTERNAME` is `ROBOLINKS-TCJR`.
-2. Run `npm.cmd run service:status`; expect `Started`.
-3. Open `http://localhost/api/health`; expect server healthy and database `ok`.
-4. Open `http://robolinks-tcjr`, `/dashboard`, `/printer`, and `/scanner` directly without Vite.
-5. Confirm the operator can open `http://robolinks-tcjr` from another TP-Link client after the network is Private.
-6. Confirm `logs/app.log` shows the existing database path and `Environment: production`.
-7. If the PLC is off, confirm the UI remains available and PLC is offline/stale. When the PLC returns, observe the existing reconnect/telemetry behavior without restarting the service.
-8. Before enabling physical label printing, verify the machine-wide printer queue is visible to LocalService.
-9. Do not use Microsoft Print to PDF Save-As as a production service test.
+Expected behavior:
+
+1. Windows starts.
+2. `PLC Web System` starts automatically after the delayed-start interval.
+3. `http://localhost` opens the production SPA.
+4. `http://robolinks-tcjr` opens the same SPA.
+5. `/api/health` returns server healthy/database `ok`.
+6. WebSocket reconnects.
+7. PLC telemetry reconnects when the PLC is available.
+8. If PLC is unavailable, the web service remains up and reports offline/stale state rather than crashing.
+
+Health check:
+
+```text
+http://robolinks-tcjr/api/health
+```
+
+## Physical printer note
+
+Before enabling production label printing on a physical printer:
+
+1. Install the printer driver/queue machine-wide.
+2. Verify the queue is visible to `NT AUTHORITY\LocalService`.
+3. Configure the correct physical label stock/size.
+4. Validate real output on the target printer.
+
+Do not use Microsoft Print to PDF Save-As as the final physical-printer validation.
