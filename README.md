@@ -1,101 +1,52 @@
-# Hệ thống PLC Web chạy trong LAN TP-Link
+# PLC Web System – Print, Scan & TraceCode
 
-Hệ thống chạy hoàn toàn trong mạng LAN riêng, không cần Internet khi vận hành:
+Hệ thống Web Server cục bộ dành cho PLC Siemens S7-1200, Print Queue, Scan/TraceCode và Traceability. Hệ thống được triển khai trong LAN TP-Link và có thể vận hành không cần Internet sau khi đã cài đặt đầy đủ dependency.
 
-- ThinkPad / Web Server: `192.168.0.100`
-- PLC Siemens: `192.168.0.1:2000`
-- TP-Link gateway: `192.168.0.254`
-- Frontend gọi API bằng `/api` và WebSocket bằng `/ws` trên chính host đang mở trang.
+## Trạng thái production hiện tại
 
-## Yêu cầu hệ thống
-- **Node.js**: Phiên bản 18.0.0 trở lên
-- Trình duyệt web hiện đại (Chrome, Edge, Firefox)
+- **Friendly URL:** `http://robolinks-tcjr`
+- **Server LAN:** `192.168.0.100`
+- **PLC Siemens S7-1200:** `192.168.0.1:2000`
+- **TP-Link gateway:** `192.168.0.254`
+- **Production HTTP:** TCP `80`
+- **Frontend/API/WebSocket:** cùng một host, frontend dùng `/api` và `/ws`
+- **Windows Service:** `PLC Web System`, WinSW x64 2.12.0, Automatic Delayed Start
+- **Production không dùng:** Vite `:5173`, nodemon hoặc terminal chạy thủ công
 
-## Cài đặt ban đầu
-
-Internet chỉ cần thiết cho lần cài Node.js và tải package. Sau khi đã có `node_modules` (hoặc dùng bản đóng gói sẵn), hệ thống vận hành không phụ thuộc Internet.
-
-1. Cài đặt Node.js 18 trở lên khi máy chưa có.
-2. Chạy file `setup.bat` nằm ở thư mục gốc của project để tự động:
-   - Cài đặt thư viện cho Backend
-   - Cài đặt thư viện cho Frontend
-   - Khởi tạo và tạo dữ liệu mẫu cho Database (SQLite)
-
-3. Sao chép `backend/.env.example` thành `backend/.env`, tạo `JWT_SECRET` riêng và giữ file này trên máy server. `.env` thật đã được git bỏ qua.
-
-## Cấu hình mạng LAN
-
-1. Đặt IPv4 tĩnh cho ThinkPad là `192.168.0.100` (subnet mask thường là `255.255.255.0`), gateway `192.168.0.254`.
-2. Kết nối ThinkPad, PLC và các thiết bị truy cập vào cùng LAN/Wi-Fi TP-Link. Không bật client/AP isolation.
-3. Cho phép inbound TCP `3000` và `5173` trên Windows Firewall của ThinkPad. PLC phải cho phép kết nối TCP từ ThinkPad tới `192.168.0.1:2000`.
-4. Không cần DNS hoặc kết nối WAN để sử dụng hệ thống.
-
-## Khởi chạy chế độ phát triển trong LAN
-
-Chạy song song hai cửa sổ terminal:
-
-**Cửa sổ 1 - Khởi chạy Backend:**
-```cmd
-cd backend
-npm run dev
-```
-Backend bind trên `0.0.0.0:3000`.
-
-**Cửa sổ 2 - Khởi chạy Frontend:**
-```cmd
-cd frontend
-npm run dev
-```
-Vite bind trên `0.0.0.0:5173`. Từ điện thoại, tablet hoặc máy tính cùng Wi-Fi TP-Link, mở:
+Luồng production:
 
 ```text
-http://192.168.0.100:5173
+Windows boot
+→ PLC Web System Windows Service
+→ Node.js production server
+→ Vue SPA + API + WebSocket
+→ PLC TCP reconnect/telemetry
+→ operator mở http://robolinks-tcjr
 ```
 
-Không dùng `localhost` trên thiết bị khác vì địa chỉ đó trỏ về chính thiết bị đang mở trình duyệt.
+## Chức năng chính
 
-## Chạy production trong LAN
+- **Dashboard:** tổng quan PLC/line status, cảnh báo, print jobs và realtime tags.
+- **Machine Control:** JOB, START, STOP, HOME, RESET và giám sát trạng thái máy/motion.
+- **Print Queue:** quản lý Windows Print Queue; kiến trúc `WINDOWS_QUEUE` là mode chính, `RAW_TCP_LEGACY` chỉ giữ cho tương thích cũ.
+- **PDF → Trace QR:** chọn PDF, tính SHA-256, tạo TraceCode `DOC-XXXXXXXXXXXXXXXX`, sinh file QR riêng và tải xuống qua browser; PDF nguồn không bị sửa hoặc ghi đè.
+- **Scan & TraceCode:** nhận barcode/QR qua USB HID hoặc nhập thủ công và xử lý workflow sản phẩm/job.
+- **Traceability:** lưu lịch sử PLC, job, print/trace và dữ liệu truy vết.
+- **Device Registry:** quản lý PLC, printer và cấu hình thiết bị.
+- **Persistence/Reconciliation:** lưu trạng thái job PLC trong SQLite và đối chiếu lại với telemetry sau backend restart.
 
-Build frontend khi package đã được cài sẵn, sau đó chạy backend:
+## Kiến trúc
 
-```cmd
-cd frontend
-npm run build
-cd ..\backend
-npm start
-```
+- **Frontend:** Vue 3 + Vite (Vite chỉ dùng cho development), Pinia, WebSocket realtime.
+- **Backend:** Node.js + Express.
+- **Database:** SQLite.
+- **PLC transport:** Siemens S7-1200 ASCII TCP Socket tại `192.168.0.1:2000`.
+- **Production host:** backend serve trực tiếp `frontend/dist` trên port 80.
+- **Windows Service:** WinSW chạy một Node production process dưới Windows SCM.
 
-Với `NODE_ENV=production`, backend phục vụ cả giao diện, API và WebSocket. Thiết bị cùng Wi-Fi truy cập `http://192.168.0.100:3000`.
+## Giao thức PLC
 
-## Tài khoản Đăng nhập Mặc định
-- Username: `admin`
-- Password: `Admin@123`
-
-## Kiến trúc đã triển khai
-1. **Frontend**: Vue 3 + Vite, State quản lý bằng Pinia, Real-time update bằng WebSocket, giao diện Dark Theme chuyên nghiệp cho môi trường công nghiệp.
-2. **Backend**: Node.js + Express.
-3. **Database**: SQLite (file lưu tại `backend/database/plc_system.db`).
-4. **PLC Service**: Siemens S7-1200 ASCII TCP tại `192.168.0.1:2000`, dùng `JOB=PPPP,RRRR,QQQQ`, `START=0000`, `STOP=0000`, `HOME=0000`, `RESET=0000`; REAL mode không giả ACK/ONLINE.
-5. **Printer Service**: Quản lý máy in nhãn Godex qua adapter TCP/IP. Template lưu dữ liệu nhãn logic; driver chỉ mã hóa lệnh khi model và command language đã được cấu hình, xác thực.
-6. **Scanner Service**: Xử lý dữ liệu mã vạch (Barcode/QR code) đầu vào, phân tích dữ liệu, lưu lịch sử.
-
-## Ánh xạ dữ liệu Job PLC
-
-SQLite hiện chưa có các cột PLC ProductID, RecipeID và TargetQty. Cấu hình ánh xạ theo barcode bằng biến môi trường `PLC_JOB_MAP`, ví dụ:
-
-```env
-PLC_JOB_MAP={"PROD-001":{"productId":1,"recipeId":1,"targetQty":1}}
-```
-
-Nếu thiếu ánh xạ, workflow trả `plc_job_configuration_missing` và không gửi command. `target_revs` vẫn được giữ trong SQLite nhưng không được dùng trong protocol PLC hiện tại.
-
-## Lưu ý an toàn khi kiểm thử
-
-- Dùng `DEMO_MODE=true` cho kiểm thử giao diện hoặc workflow không có phần cứng.
-- `DEMO_MODE=false` là REAL mode và có thể mở kết nối tới PLC thật; chỉ bật khi dây chuyền đã sẵn sàng.
-- Không chạy smoke test hoặc endpoint điều khiển `JOB/START/STOP/HOME/RESET` trên PLC đang vận hành nếu chưa có quy trình an toàn tại hiện trường.
-
-## Protocol điều khiển máy
+Machine commands:
 
 ```text
 JOB=PPPP,RRRR,QQQQ
@@ -103,10 +54,189 @@ START=0000
 STOP=0000
 HOME=0000
 RESET=0000
+STATUS=0000
 ```
 
-`HOME=0000` yêu cầu PLC thực hiện homing/reference axis. `RESET=0000` reset fault hoặc machine state. Đây là hai lệnh độc lập; HOME không đồng nghĩa với RESET. Trong REAL mode, callback của `socket.write` chỉ được ghi là command đã gửi vào TCP stack, không phải homing đã hoàn tất và không phải PLC ACK.
+ACK:
 
-Backend poll telemetry bằng raw ASCII `STATUS=0000` (không CR/LF), với chu kỳ `PLC_STATUS_POLL_MS`. PLC trả frame `STAT=S,J,PPPP,RRRR,QQQQ,R,U,F,EEEE,A,M,H,P,O,TT`; chỉ frame đủ 15 field và hợp lệ mới cập nhật WebSocket với quality `GOOD`. Trước frame hợp lệ đầu tiên, các tag giữ `null / UNKNOWN`.
+```text
+JOB   → ACK=0001
+START → ACK=0002
+STOP  → ACK=0003
+RESET → ACK=0004
+HOME  → ACK=0005
+```
 
-Mỗi PLC dùng một transaction scheduler. Machine command giữ transaction cho tới ACK tương ứng (`JOB→ACK=0001`, `START→ACK=0002`, `STOP→ACK=0003`, `RESET→ACK=0004`, `HOME→ACK=0005`) hoặc `PLC_RESPONSE_TIMEOUT_MS`; STATUS giữ transaction tới STAT hợp lệ hoặc timeout. Machine queue được ưu tiên và poll tick bị bỏ qua khi PLC đang có transaction hoặc command đang chờ.
+Telemetry:
+
+```text
+STAT=S,J,PPPP,RRRR,QQQQ,R,U,F,EEEE,A,M,H,P,O,TT
+```
+
+Backend chỉ cập nhật telemetry khi nhận frame STAT hợp lệ đủ 15 field. Hệ thống phân biệt TCP connected với telemetry healthy/fresh; khi dữ liệu stale không giả `0/false` thành dữ liệu thật.
+
+## PLC job persistence và reconciliation
+
+`production_jobs` lưu các trường PLC như:
+
+- `plc_device_id`
+- `plc_product_id`
+- `plc_recipe_id`
+- `plc_target_qty`
+- `plc_job_loaded`
+- `plc_loaded_at`
+- `last_plc_ack`
+- `plc_reconcile_status`
+
+Job chỉ được đánh dấu loaded sau ACK hợp lệ. Sau backend restart, SQLite được đối chiếu lại với STAT của PLC để tránh mất trạng thái hoặc chạy nhầm job.
+
+## PDF → Trace QR
+
+Workflow độc lập với printer/spooler:
+
+```text
+PDF nguồn
+→ upload qua browser
+→ SHA-256
+→ TraceCode DOC-XXXXXXXXXXXXXXXX
+→ QR PDF riêng
+→ browser download
+→ scanner đọc TraceCode
+→ lookup metadata/product/job
+```
+
+Bảng `document_traces` lưu metadata/fingerprint và liên kết tùy chọn tới product/job; không lưu Windows local path và không lưu bytes PDF nguồn.
+
+## Printer architecture
+
+Production sử dụng **Windows Print Queue** làm cơ chế chính để hỗ trợ nhiều driver/máy in.
+
+- `WINDOWS_QUEUE`: mode chính.
+- `RAW_TCP_LEGACY`: chỉ giữ tương thích legacy.
+- Printer vật lý Godex/Zebra/TSC cần được cài driver/queue machine-wide để Windows Service account có thể nhìn thấy queue.
+- `Microsoft Print to PDF` chỉ phù hợp cho kiểm thử tương tác, không phải production printer queue trong Session 0.
+
+## Yêu cầu hệ thống
+
+- Windows 10/11 hoặc Windows Server tương thích WinSW.
+- Node.js `>=18`.
+- Trình duyệt hiện đại: Chrome, Edge hoặc Firefox.
+- PLC và ThinkPad cùng LAN TP-Link khi chạy REAL mode.
+
+## Cài đặt ban đầu
+
+```cmd
+cd backend
+npm install
+cd ..\frontend
+npm install
+```
+
+Tạo environment local:
+
+```text
+backend/.env.example → backend/.env
+```
+
+Tạo `JWT_SECRET` mạnh và giữ `.env` chỉ trên máy server. Repository không chứa `.env`, runtime database, logs, uploads, tmp, `node_modules` hoặc ZIP export.
+
+> Không lưu hoặc công khai mật khẩu quản trị production trong repository. Initial administrator credentials phải được cấu hình/đổi cục bộ trên máy triển khai.
+
+## Development mode
+
+Development vẫn có thể chạy riêng backend và Vite:
+
+**Backend:**
+
+```cmd
+cd backend
+npm run dev
+```
+
+Mặc định backend development dùng port 3000 nếu `.env` không override.
+
+**Frontend:**
+
+```cmd
+cd frontend
+npm run dev
+```
+
+Vite development dùng port 5173. Khi dùng Vite, cấu hình `CORS_ORIGIN` trong `.env` phải trùng origin của frontend development.
+
+## Production build và chạy trực tiếp
+
+Từ `backend`:
+
+```cmd
+npm.cmd run build:frontend
+npm.cmd test
+npm.cmd start
+```
+
+`npm start` chạy `scripts/start-production.js`, ép production mode và mặc định bind `0.0.0.0:80` nếu `PORT` chưa được cấu hình.
+
+Production URL:
+
+```text
+http://robolinks-tcjr
+```
+
+Địa chỉ kỹ thuật dự phòng trong LAN:
+
+```text
+http://192.168.0.100
+```
+
+## Windows Service
+
+Các lệnh service chạy từ `backend` trong Administrator terminal:
+
+```cmd
+npm.cmd run service:install
+npm.cmd run service:start
+npm.cmd run service:status
+npm.cmd run service:stop
+npm.cmd run service:uninstall
+```
+
+Service hiện dùng:
+
+- ID: `PLCWebSystem`
+- Display name: `PLC Web System`
+- Startup: Automatic Delayed Start
+- Account: `NT AUTHORITY\LocalService`
+- Listener: `0.0.0.0:80`
+- Working directory: `backend`
+
+Chi tiết deployment xem tại [`docs/windows-service.md`](docs/windows-service.md).
+
+## Firewall / LAN
+
+Production cần inbound TCP 80 trên trusted Private network:
+
+```powershell
+New-NetFirewallRule -DisplayName "PLC Web System TCP 80 (Private)" `
+  -Direction Inbound -Action Allow -Protocol TCP -LocalPort 80 -Profile Private
+```
+
+TP-Link production network phải được Windows phân loại là `Private`.
+
+## Health check
+
+```text
+GET http://robolinks-tcjr/api/health
+```
+
+Health endpoint kiểm tra server/database mà không gửi PLC machine command.
+
+## Lưu ý an toàn
+
+- `DEMO_MODE=true`: dùng cho UI/workflow khi không có hardware.
+- `DEMO_MODE=false`: REAL mode, backend có thể kết nối PLC thật.
+- Không gọi JOB/START/STOP/HOME/RESET trên thiết bị đang vận hành nếu chưa có quy trình an toàn tại hiện trường.
+- `HOME` và `RESET` là hai lệnh độc lập; HOME không đồng nghĩa với RESET.
+
+## Giới hạn hiện tại
+
+Core software, PLC realtime, TraceCode và production Windows Service đã được kiểm thử. Việc hiệu chỉnh khổ giấy/driver và xác nhận đầu ra cuối trên máy in tem vật lý thực tế cần thực hiện khi có hardware production tương ứng.
