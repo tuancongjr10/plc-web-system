@@ -1,0 +1,34 @@
+<service>
+  <id>PLCWebSystem</id>
+  <name>PLC Web System</name>
+  <description>PLC Web System production Node.js backend, frontend, WebSocket, and PLC reconnect service.</description>
+
+  <executable>C:\Program Files\nodejs\node.exe</executable>
+  <arguments>"%BASE%\..\scripts\start-production.js"</arguments>
+  <workingdirectory>%BASE%\..</workingdirectory>
+
+  <env name="NODE_ENV" value="production" />
+  <env name="HOST" value="0.0.0.0" />
+  <env name="PORT" value="80" />
+  <env name="DB_PATH" value="%BASE%\..\database\plc_system.db" />
+  <env name="LOG_FILE_PATH" value="%BASE%\..\logs\app.log" />
+  <env name="SCAN_FILES_PATH" value="%BASE%\..\uploads\scans" />
+  <env name="TEMP" value="%BASE%\..\tmp\service" />
+  <env name="TMP" value="%BASE%\..\tmp\service" />
+
+  <serviceaccount>
+    <domain>NT AUTHORITY</domain>
+    <user>LocalService</user>
+  </serviceaccount>
+  <startmode>Automatic</startmode>
+  <delayedAutoStart />
+  <onfailure action="restart" delay="10 sec" />
+  <resetfailure>1 hour</resetfailure>
+  <stoptimeout>20 sec</stoptimeout>
+
+  <logpath>%BASE%\..\logs\service</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>

@@ -2,6 +2,7 @@ const net = require('net');
 const EventEmitter = require('events');
 const config = require('../../config');
 const logger = require('../../config/logger');
+// DEPRECATED: emergency RAW_TCP_LEGACY fallback only. New printers use Windows queues.
 class GodexPrinterAdapter extends EventEmitter {
   validate(printer) {
     if (!printer.model) throw new Error('printer_model_not_configured');

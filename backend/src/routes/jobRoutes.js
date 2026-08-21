@@ -11,6 +11,7 @@ router.get('/logs', jobController.getProductionLogs);
 router.post('/:id/start', authorize('admin', 'operator'), jobController.startJob);
 router.post('/:id/stop', authorize('admin', 'operator'), jobController.stopJob);
 router.post('/:id/home', authorize('admin', 'operator'), jobController.homeJob);
+router.post('/:id/reset', authorize('admin', 'operator'), jobController.resetJob);
 router.post('/:id/print', authorize('admin', 'operator'), jobController.printJob);
 
 module.exports = router;

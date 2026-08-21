@@ -1,3 +1,4 @@
+// DEPRECATED: logical/raw vendor renderer retained only for Phase 1 compatibility.
 class GodexRenderer {
   normalizeTemplate(template, variables = {}) {
     const definition = typeof template.definition === 'string' ? JSON.parse(template.definition) : template.definition;

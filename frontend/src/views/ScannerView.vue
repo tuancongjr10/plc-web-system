@@ -1,39 +1,43 @@
 <template>
   <div>
     <div class="page-header">
-      <h2 class="page-title">📷 Scanner & Barcode Workflow</h2>
+      <h2 class="page-title">📷 Scan & TraceCode</h2>
       <button class="btn btn-secondary" @click="loadData" :disabled="isLoading">
-        🔄 Làm mới
+        🔄 Refresh
       </button>
+    </div>
+
+    <div v-if="loadError" class="card mb-4" style="border-color: var(--color-danger)">
+      <div class="text-danger text-sm">Unable to load scanner data: {{ loadError }}</div>
     </div>
 
     <div class="grid grid-2" style="gap: var(--space-6)">
       <!-- Scanner Input Panel & Workflow Controls -->
       <div class="card">
         <div class="card-header">
-          <h3 class="card-title">Quét mã vạch</h3>
+          <h3 class="card-title">Barcode Input</h3>
         </div>
 
         <div class="scan-area">
           <div class="camera-placeholder mb-4">
              <div class="icon-camera mb-2">📷</div>
-             <p class="text-sm text-muted">Tính năng quét qua Camera đang được phát triển.</p>
-             <p class="text-xs text-muted">Vui lòng sử dụng máy quét cầm tay hoặc nhập tay bên dưới.</p>
+             <p class="text-sm text-muted">Camera scanning is not enabled.</p>
+             <p class="text-xs text-muted">Use a USB barcode scanner or manual input.</p>
           </div>
 
           <form @submit.prevent="submitManualScan" class="form-group">
-            <label class="form-label">Nhập mã vạch hoặc quét bằng máy quét USB</label>
+            <label class="form-label">Scan barcode or enter code manually</label>
             <div class="flex gap-2">
               <input 
                 type="text" 
                 v-model="manualBarcode" 
                 class="form-input" 
-                placeholder="Quét hoặc gõ mã vào đây..." 
+                placeholder="Scan or enter code here..."
                 ref="barcodeInput"
                 autofocus
               />
               <button type="submit" class="btn btn-primary" :disabled="!manualBarcode || isScanning">
-                {{ isScanning ? 'Đang xử lý...' : 'Xử lý' }}
+                {{ isScanning ? 'Processing...' : 'Process' }}
               </button>
             </div>
           </form>
@@ -41,22 +45,22 @@
         
         <!-- Last Scan Error Warning -->
         <div v-if="lastScanResult && !lastScanResult.success" class="mt-4 p-3 border border-danger rounded bg-danger-light text-danger text-sm">
-          <strong>❌ Lỗi quét mã:</strong> {{ lastScanResult.processResult?.message || 'Không tìm thấy sản phẩm' }}
+          <strong>❌ Scan error:</strong> {{ lastScanResult.processResult?.message || 'Product not found' }}
         </div>
 
         <!-- Active Production Controls -->
         <div v-if="activeJob && activeProduct" class="mt-6 p-4 border rounded bg-tertiary">
           <div class="flex justify-between items-center mb-3 pb-2 border-b" style="border-bottom: 1px solid var(--color-border)">
-            <h4 class="font-semibold text-brand text-sm">📋 Yêu cầu sản xuất hoạt động</h4>
-            <span class="badge" :class="getJobStatusBadgeClass(activeJob.status)">{{ activeJob.status.toUpperCase() }}</span>
+            <h4 class="font-semibold text-brand text-sm">📋 Active Production Job</h4>
+            <span class="badge" :class="getJobStatusBadgeClass(activeJob.status)">{{ formatStatus(activeJob.status) }}</span>
           </div>
           
           <div class="grid grid-2 text-xs gap-2 mb-4">
-            <div><strong>Sản phẩm:</strong> {{ activeProduct.name }}</div>
-            <div><strong>Mã vạch:</strong> {{ activeProduct.barcode }}</div>
-            <div><strong>Vòng quay mục tiêu:</strong> {{ activeJob.target_revs }}</div>
-            <div><strong>Tốc độ động cơ:</strong> {{ activeJob.speed_rpm }} RPM</div>
-            <div style="grid-column: span 2"><strong>Mã Job:</strong> <span class="text-mono font-medium">{{ activeJob.job_code }}</span></div>
+            <div><strong>Product:</strong> {{ activeProduct.name }}</div>
+            <div><strong>Barcode:</strong> {{ activeProduct.barcode }}</div>
+            <div><strong>Target Revs:</strong> {{ activeJob.target_revs }}</div>
+            <div><strong>Speed RPM:</strong> {{ activeJob.speed_rpm }} RPM</div>
+            <div style="grid-column: span 2"><strong>Job Code:</strong> <span class="text-mono font-medium">{{ activeJob.job_code }}</span></div>
           </div>
           
           <div class="flex flex-col gap-3">
@@ -66,30 +70,38 @@
                 :disabled="activeJob.status === 'running' || isControlLoading || !isOperator"
                 @click="triggerStart"
               >
-                ▶️ START (MOVE)
+                CmdStart
               </button>
               <button 
                 class="btn btn-danger flex-1 text-xs" 
                 :disabled="activeJob.status !== 'running' || isControlLoading || !isOperator"
                 @click="triggerStop"
               >
-                ⏹️ STOP
+                CmdStop
+              </button>
+              <button
+                class="btn btn-warning flex-1 text-xs"
+                :disabled="homeDisabled"
+                :title="homeDisabledReason"
+                @click="triggerHome"
+              >
+                Home
               </button>
               <button 
                 class="btn btn-secondary flex-1 text-xs" 
                 :disabled="activeJob.status === 'completed' || isControlLoading || !isOperator"
-                @click="triggerHome"
+                @click="triggerReset"
               >
-                🏠 HOME (ZERO)
+                Reset
               </button>
             </div>
 
             <!-- Printer selection and logical label print -->
             <div class="border-t pt-3" style="border-top: 1px solid var(--color-border)">
-              <label class="form-label text-xs mb-1">Máy in nhãn Godex</label>
+              <label class="form-label text-xs mb-1">Print Queue</label>
               <div class="flex gap-2">
                 <select v-model="selectedPrinterId" class="form-select flex-1 text-xs">
-                  <option value="" disabled>-- Chọn máy in --</option>
+                  <option value="" disabled>-- Select Printer --</option>
                   <option v-for="printer in printers" :key="printer.id" :value="printer.id">
                     {{ printer.name }} ({{ printer.connection_status === 'demo' ? 'DEMO' : (printer.connection_status || 'offline').toUpperCase() }})
                   </option>
@@ -99,7 +111,7 @@
                   :disabled="!selectedPrinterId || isPrintingLabel || !isOperator"
                   @click="printJobLabel"
                 >
-                  🖨️ In nhãn
+                  🖨️ Print Label
                 </button>
               </div>
             </div>
@@ -110,7 +122,7 @@
       <!-- Stats -->
       <div class="card">
         <div class="card-header">
-          <h3 class="card-title">Thống kê (24h)</h3>
+          <h3 class="card-title">Scan Statistics (24h)</h3>
         </div>
         
         <div class="flex flex-col gap-4">
@@ -118,13 +130,13 @@
             <div class="stat-icon brand">📷</div>
             <div>
               <div class="stat-value text-brand">{{ stats.total || 0 }}</div>
-              <div class="stat-label">Tổng lượt quét</div>
+              <div class="stat-label">Total Scans</div>
             </div>
           </div>
           
           <div>
-            <h4 class="text-sm font-semibold mb-2 text-muted">Theo loại mã</h4>
-            <div v-if="!stats.byType || stats.byType.length === 0" class="text-sm text-muted">Chưa có dữ liệu</div>
+            <h4 class="text-sm font-semibold mb-2 text-muted">By Barcode Type</h4>
+            <div v-if="!stats.byType || stats.byType.length === 0" class="text-sm text-muted">No Data</div>
             <div v-else class="flex flex-col gap-2">
               <div v-for="type in stats.byType" :key="type.barcode_type" class="flex justify-between items-center bg-tertiary p-2 rounded text-sm">
                 <span>{{ type.barcode_type }}</span>
@@ -138,24 +150,24 @@
       <!-- Scan History -->
       <div class="card" style="grid-column: span 2">
         <div class="card-header">
-          <h3 class="card-title">Lịch sử quét</h3>
+          <h3 class="card-title">Scan History</h3>
         </div>
 
         <div class="table-container">
           <table class="table">
             <thead>
               <tr>
-                <th>Thời gian</th>
-                <th>Mã vạch</th>
-                <th>Loại</th>
-                <th>Nguồn</th>
-                <th>Người quét</th>
-                <th>Kết quả xử lý</th>
+                <th>Time</th>
+                <th>Barcode</th>
+                <th>Type</th>
+                <th>Source</th>
+                <th>Operator</th>
+                <th>Result</th>
               </tr>
             </thead>
             <tbody>
               <tr v-if="history.length === 0">
-                <td colspan="6" class="text-center text-muted py-4">Không có dữ liệu</td>
+                <td colspan="6" class="text-center text-muted py-4">No Data</td>
               </tr>
               <tr v-for="record in history" :key="record.id">
                 <td class="text-xs text-muted">{{ formatTime(record.created_at) }}</td>
@@ -178,14 +190,17 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import api from '@/composables/useApi'
+import { usePlcStore } from '@/stores/plc'
+import api, { interactivePrintRequestConfig } from '@/composables/useApi'
 
 const authStore = useAuthStore()
+const plcStore = usePlcStore()
 const isOperator = computed(() => authStore.isOperator)
 
 const isLoading = ref(false)
 const history = ref([])
 const stats = ref({})
+const loadError = ref('')
 
 const manualBarcode = ref('')
 const isScanning = ref(false)
@@ -199,19 +214,91 @@ const printers = ref([])
 const selectedPrinterId = ref('')
 const isControlLoading = ref(false)
 const isPrintingLabel = ref(false)
+const plcDevices = ref([])
+const plcTags = ref([])
+const selectedDeviceId = ref('')
+
+const selectedDeviceLive = computed(() => {
+  const device = plcDevices.value.find(item => item.id === selectedDeviceId.value)
+  return device?.liveStatus || { connected: device?.connection_status === 'connected', isDemo: false }
+})
+
+const selectedDeviceOnline = computed(() => selectedDeviceLive.value?.connected === true && !selectedDeviceLive.value?.isDemo)
+
+function getTagLiveValue(tag) {
+  return plcStore.tagValues[tag.id] || tag.currentValue || { value: null, quality: 'unknown' }
+}
+
+function getSafeBooleanTag(tagName) {
+  const tag = plcTags.value.find(item => item.tag_name.toLowerCase() === tagName.toLowerCase())
+  if (!tag) return null
+  const live = getTagLiveValue(tag)
+  if (String(live.quality || '').toLowerCase() !== 'good') return null
+  if (live.value === true || live.value === 1 || live.value === '1' || String(live.value).toLowerCase() === 'true') return true
+  if (live.value === false || live.value === 0 || live.value === '0' || String(live.value).toLowerCase() === 'false') return false
+  return null
+}
+
+const homeBusyTagExists = computed(() => plcTags.value.some(item => item.tag_name.toLowerCase() === 'homebusy'))
+const homeSafetyState = computed(() => ({
+  machineRunning: getSafeBooleanTag('MachineRunning'),
+  moveBusy: getSafeBooleanTag('MoveBusy'),
+  haltBusy: getSafeBooleanTag('HaltBusy'),
+  axisPositioning: getSafeBooleanTag('AxisPositioning'),
+  homeBusy: getSafeBooleanTag('HomeBusy'),
+}))
+
+const homeAllowed = computed(() => {
+  const state = homeSafetyState.value
+  return selectedDeviceOnline.value &&
+    state.machineRunning === false &&
+    state.moveBusy === false &&
+    state.haltBusy === false &&
+    state.axisPositioning === false &&
+    (!homeBusyTagExists.value || state.homeBusy === false)
+})
+
+const homeDisabled = computed(() => isControlLoading.value || !isOperator.value || !homeAllowed.value)
+const homeDisabledReason = computed(() => homeAllowed.value
+  ? ''
+  : 'HOME requires REAL / ONLINE PLC with realtime GOOD/false status: MachineRunning, MoveBusy, HaltBusy, AxisPositioning, HomeBusy (if present)')
 
 async function loadData() {
   isLoading.value = true
+  loadError.value = ''
   try {
     await Promise.all([
       loadHistory(),
       loadActiveState(),
-      loadPrinters()
+      loadPrinters(),
+      loadPlcState()
     ])
   } catch (err) {
     console.error('Failed to load scanner page data:', err)
+    loadError.value = err.response?.data?.error || err.message || 'Unable to load scanner data'
   } finally {
     isLoading.value = false
+  }
+}
+
+async function loadPlcState() {
+  try {
+    const deviceRes = await api.get('/plc/devices')
+    plcDevices.value = deviceRes.data.data || []
+    const device = plcDevices.value.find(item => item.is_active) || plcDevices.value[0]
+    selectedDeviceId.value = device?.id || ''
+    if (!selectedDeviceId.value) {
+      plcTags.value = []
+      return
+    }
+    const tagRes = await api.get(`/plc/devices/${selectedDeviceId.value}/tags`)
+    plcTags.value = tagRes.data.data || []
+  } catch (err) {
+    plcDevices.value = []
+    plcTags.value = []
+    selectedDeviceId.value = ''
+    console.error('Failed to load PLC state for HOME:', err)
+    throw err
   }
 }
 
@@ -225,6 +312,8 @@ async function loadHistory() {
     stats.value = statRes.data.data || {}
   } catch (err) {
     console.error('Failed to load scanner history:', err)
+    loadError.value = err.response?.data?.error || err.message || 'Unable to load scan history'
+    throw err
   }
 }
 
@@ -241,6 +330,8 @@ async function loadActiveState() {
     }
   } catch (err) {
     console.error('Failed to load active job:', err)
+    loadError.value = err.response?.data?.error || err.message || 'Unable to load active job'
+    throw err
   }
 }
 
@@ -253,6 +344,8 @@ async function loadPrinters() {
     }
   } catch (err) {
     console.error('Failed to load printers:', err)
+    loadError.value = err.response?.data?.error || err.message || 'Unable to load printers'
+    throw err
   }
 }
 
@@ -306,7 +399,7 @@ async function triggerStart() {
       activeJob.value = res.data.data.job
     }
   } catch (err) {
-    alert('Lỗi gửi lệnh START: ' + (err.response?.data?.error || err.message))
+    alert('Unable to send START command: ' + (err.response?.data?.error || err.message))
   } finally {
     isControlLoading.value = false
   }
@@ -321,22 +414,36 @@ async function triggerStop() {
       activeJob.value = res.data.data.job
     }
   } catch (err) {
-    alert('Lỗi gửi lệnh STOP: ' + (err.response?.data?.error || err.message))
+    alert('Unable to send STOP command: ' + (err.response?.data?.error || err.message))
   } finally {
     isControlLoading.value = false
   }
 }
 
 async function triggerHome() {
+  if (!homeAllowed.value) return
+  isControlLoading.value = true
+  try {
+    const res = await api.post(`/plc/devices/${selectedDeviceId.value}/home`)
+    const result = res.data.data
+    alert(`${result.mode}: ${result.command} → ${result.result.toUpperCase()} (TCP write callback; PLC ACK not yet received)`)
+  } catch (err) {
+    alert('Unable to send HOME command: ' + (err.response?.data?.error || err.message))
+  } finally {
+    isControlLoading.value = false
+  }
+}
+
+async function triggerReset() {
   if (!activeJob.value) return
   isControlLoading.value = true
   try {
-    const res = await api.post(`/jobs/${activeJob.value.id}/home`)
+    const res = await api.post(`/jobs/${activeJob.value.id}/reset`)
     if (res.data?.data?.job) {
       activeJob.value = res.data.data.job
     }
   } catch (err) {
-    alert('Lỗi gửi lệnh HOME: ' + (err.response?.data?.error || err.message))
+    alert('Unable to send RESET command: ' + (err.response?.data?.error || err.message))
   } finally {
     isControlLoading.value = false
   }
@@ -349,10 +456,10 @@ async function printJobLabel() {
     await api.post(`/jobs/${activeJob.value.id}/print`, {
       printerId: selectedPrinterId.value,
       copies: 1
-    })
-    alert('Đã gửi lệnh in thành công!')
+    }, interactivePrintRequestConfig)
+    alert('Print command submitted successfully.')
   } catch (err) {
-    alert('Lỗi gửi lệnh in: ' + (err.response?.data?.error || err.message))
+    alert('Unable to submit print command: ' + (err.response?.data?.error || err.message))
   } finally {
     isPrintingLabel.value = false
   }
@@ -365,18 +472,23 @@ function determineType(data) {
   return 'unknown'
 }
 
+function formatStatus(status) {
+  const value = String(status || 'unknown').toLowerCase()
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
 function formatTime(ts) {
   if (!ts) return '-'
-  return new Date(ts).toLocaleString('vi-VN')
+  return new Date(ts).toLocaleString('en-US')
 }
 
 function getProcessMessage(record) {
-  if (!record.process_result) return 'Chưa xử lý'
+  if (!record.process_result) return 'Not Processed'
   try {
     const res = JSON.parse(record.process_result)
     return res.data?.message || res.message || res.action || 'OK'
   } catch {
-    return 'Lỗi phân tích'
+    return 'Parse Error'
   }
 }
 

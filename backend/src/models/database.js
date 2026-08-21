@@ -12,7 +12,7 @@ let db = null;
 function getDb() {
   if (db) return db;
 
-  const dbPath = path.resolve(config.database.path);
+  const dbPath = config.database.path;
   const dbDir = path.dirname(dbPath);
 
   if (!fs.existsSync(dbDir)) {
@@ -70,4 +70,3 @@ function closeDb() {
 }
 
 module.exports = { getDb, initializeSchema, closeDb };
-

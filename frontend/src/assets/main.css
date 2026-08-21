@@ -4,42 +4,43 @@
 
 /* --- CSS Custom Properties (Design Tokens) --- */
 :root {
-  /* Color Palette - Industrial Dark Theme */
-  --color-bg-primary:    hsl(220, 20%, 8%);
-  --color-bg-secondary:  hsl(220, 18%, 11%);
-  --color-bg-tertiary:   hsl(220, 16%, 15%);
-  --color-bg-elevated:   hsl(220, 15%, 18%);
-  --color-bg-hover:      hsl(220, 14%, 22%);
+  /* Color Palette - Industrial Light Theme */
+  --color-bg-primary:    #f3f4f6;
+  --color-bg-secondary:  #ffffff;
+  --color-bg-tertiary:   #f1f5f9;
+  --color-bg-elevated:   #e8edf3;
+  --color-bg-hover:      #e2e8f0;
 
-  --color-border:        hsl(220, 15%, 22%);
-  --color-border-light:  hsl(220, 12%, 28%);
+  --color-border:        #d1d5db;
+  --color-border-light:  #9ca3af;
 
   /* Text */
-  --color-text-primary:  hsl(220, 15%, 92%);
-  --color-text-secondary:hsl(220, 10%, 65%);
-  --color-text-muted:    hsl(220, 8%, 45%);
-  --color-text-inverse:  hsl(220, 20%, 8%);
+  --color-text-primary:  #111827;
+  --color-text-secondary:#374151;
+  --color-text-muted:    #64748b;
+  --color-text-inverse:  #ffffff;
 
   /* Brand - Industrial Blue */
-  --color-brand:         hsl(210, 90%, 55%);
-  --color-brand-hover:   hsl(210, 90%, 62%);
-  --color-brand-dim:     hsl(210, 60%, 20%);
-  --color-brand-subtle:  hsl(210, 50%, 15%);
+  --color-brand:         #006eb8;
+  --color-brand-hover:   #005a99;
+  --color-brand-dim:     #dbeafe;
+  --color-brand-subtle:  #eff6ff;
 
   /* Status Colors */
-  --color-success:       hsl(142, 70%, 45%);
-  --color-success-dim:   hsl(142, 50%, 12%);
-  --color-warning:       hsl(38, 92%, 50%);
-  --color-warning-dim:   hsl(38, 60%, 12%);
-  --color-danger:        hsl(0, 75%, 55%);
-  --color-danger-dim:    hsl(0, 50%, 12%);
-  --color-info:          hsl(195, 80%, 50%);
-  --color-info-dim:      hsl(195, 50%, 12%);
+  --color-success:       #15803d;
+  --color-success-dim:   #dcfce7;
+  --color-warning:       #a16207;
+  --color-warning-dim:   #fef3c7;
+  --color-danger:        #c62828;
+  --color-danger-rgb:    198, 40, 40;
+  --color-danger-dim:    #fee2e2;
+  --color-info:          #0369a1;
+  --color-info-dim:      #e0f2fe;
 
   /* PLC specific colors */
-  --color-plc-online:    hsl(142, 70%, 45%);
-  --color-plc-offline:   hsl(0, 75%, 55%);
-  --color-plc-alarm:     hsl(38, 92%, 50%);
+  --color-plc-online:    #15803d;
+  --color-plc-offline:   #c62828;
+  --color-plc-alarm:     #a16207;
 
   /* Typography */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -75,10 +76,10 @@
   --radius-full: 9999px;
 
   /* Shadows */
-  --shadow-sm:  0 1px 3px hsl(220, 40%, 3% / 0.5);
-  --shadow-md:  0 4px 16px hsl(220, 40%, 3% / 0.6);
-  --shadow-lg:  0 8px 32px hsl(220, 40%, 3% / 0.7);
-  --shadow-glow: 0 0 20px hsl(210, 90%, 55% / 0.15);
+  --shadow-sm:  0 1px 2px rgb(15 23 42 / 0.06);
+  --shadow-md:  0 3px 10px rgb(15 23 42 / 0.09);
+  --shadow-lg:  0 10px 24px rgb(15 23 42 / 0.12);
+  --shadow-glow: 0 0 0 3px rgb(0 110 184 / 0.12);
 
   /* Transitions */
   --transition-fast: 120ms ease;
@@ -246,7 +247,10 @@ code, pre {
 }
 
 .btn:disabled {
-  opacity: 0.5;
+  opacity: 1;
+  color: #6b7280;
+  background: #e5e7eb;
+  border-color: #cbd5e1;
   cursor: not-allowed;
   pointer-events: none;
 }
@@ -289,9 +293,16 @@ code, pre {
   border-color: var(--color-success);
 }
 .btn-success:hover {
-  background: hsl(142, 70%, 52%);
+  background: #166534;
   transform: translateY(-1px);
 }
+
+.btn-warning {
+  background: #d97706;
+  color: white;
+  border-color: #d97706;
+}
+.btn-warning:hover { background: #b45309; border-color: #b45309; }
 
 .btn-ghost {
   background: transparent;
@@ -319,9 +330,9 @@ code, pre {
   white-space: nowrap;
 }
 
-.badge-success  { background: var(--color-success-dim); color: var(--color-success); }
-.badge-warning  { background: var(--color-warning-dim); color: var(--color-warning); }
-.badge-danger   { background: var(--color-danger-dim);  color: var(--color-danger); }
+.badge-success  { background: var(--color-success-dim); color: var(--color-success); border: 1px solid #86efac; }
+.badge-warning  { background: var(--color-warning-dim); color: var(--color-warning); border: 1px solid #fcd34d; }
+.badge-danger   { background: var(--color-danger-dim);  color: var(--color-danger); border: 1px solid #fca5a5; }
 .badge-brand    { background: var(--color-brand-dim);   color: var(--color-brand); }
 .badge-neutral  { background: var(--color-bg-elevated); color: var(--color-text-secondary); }
 
@@ -353,7 +364,7 @@ code, pre {
 .form-input, .form-select, .form-textarea {
   width: 100%;
   padding: 0.5rem 0.75rem;
-  background: var(--color-bg-tertiary);
+  background: #ffffff;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   color: var(--color-text-primary);
@@ -370,6 +381,12 @@ code, pre {
 }
 
 .form-input::placeholder { color: var(--color-text-muted); }
+
+.form-input:disabled, .form-select:disabled, .form-textarea:disabled {
+  background: #e5e7eb;
+  color: #6b7280;
+  border-color: #cbd5e1;
+}
 
 .form-select {
   cursor: pointer;
@@ -415,6 +432,7 @@ code, pre {
   border-bottom: 1px solid var(--color-border);
   color: var(--color-text-primary);
   vertical-align: middle;
+  background: #ffffff;
 }
 
 .table tr:last-child td { border-bottom: none; }
@@ -422,7 +440,7 @@ code, pre {
 .table tbody tr {
   transition: background var(--transition-fast);
 }
-.table tbody tr:hover { background: var(--color-bg-tertiary); }
+.table tbody tr:hover td { background: #f8fafc; }
 
 /* --- Stat Card --- */
 .stat-card {
@@ -485,10 +503,10 @@ code, pre {
   border: 1px solid;
 }
 
-.alert-success { background: var(--color-success-dim); border-color: hsl(142, 50%, 25%); color: var(--color-success); }
-.alert-warning { background: var(--color-warning-dim); border-color: hsl(38, 60%, 25%); color: var(--color-warning); }
-.alert-danger  { background: var(--color-danger-dim);  border-color: hsl(0, 50%, 25%);  color: var(--color-danger); }
-.alert-info    { background: var(--color-info-dim);    border-color: hsl(195, 50%, 25%); color: var(--color-info); }
+.alert-success { background: var(--color-success-dim); border-color: #86efac; color: var(--color-success); }
+.alert-warning { background: var(--color-warning-dim); border-color: #fcd34d; color: var(--color-warning); }
+.alert-danger  { background: var(--color-danger-dim);  border-color: #fca5a5; color: var(--color-danger); }
+.alert-info    { background: var(--color-info-dim);    border-color: #7dd3fc; color: var(--color-info); }
 
 /* --- Loading Spinner --- */
 .spinner {

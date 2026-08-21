@@ -51,7 +51,7 @@ function getProductByBarcode(req, res) {
  */
 function createProduct(req, res) {
   try {
-    const { barcode, name, target_revs, speed_rpm, label_template_id } = req.body;
+    const { barcode, name, plc_product_id, recipe_id, target_qty, target_revs, speed_rpm, label_template_id } = req.body;
 
     if (!barcode || !name) {
       return res.status(400).json({ success: false, error: 'Barcode and name are required' });
@@ -62,9 +62,9 @@ function createProduct(req, res) {
     const now = new Date().toISOString();
 
     db.prepare(`
-      INSERT INTO products (id, barcode, name, target_revs, speed_rpm, label_template_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, barcode, name, target_revs || 1000, speed_rpm || 500, label_template_id || null, now, now);
+      INSERT INTO products (id, barcode, name, plc_product_id, recipe_id, target_qty, target_revs, speed_rpm, label_template_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, barcode, name, plc_product_id ?? null, recipe_id ?? null, target_qty ?? null, target_revs || 1000, speed_rpm || 500, label_template_id || null, now, now);
 
     const product = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
 
@@ -94,7 +94,7 @@ function createProduct(req, res) {
 function updateProduct(req, res) {
   try {
     const { id } = req.params;
-    const { barcode, name, target_revs, speed_rpm, label_template_id } = req.body;
+    const { barcode, name, plc_product_id, recipe_id, target_qty, target_revs, speed_rpm, label_template_id } = req.body;
 
     const db = getDb();
     const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
@@ -105,9 +105,12 @@ function updateProduct(req, res) {
     const now = new Date().toISOString();
     db.prepare(`
       UPDATE products 
-      SET barcode = ?, name = ?, target_revs = ?, speed_rpm = ?, label_template_id = ?, updated_at = ?
+      SET barcode = ?, name = ?, plc_product_id = ?, recipe_id = ?, target_qty = ?, target_revs = ?, speed_rpm = ?, label_template_id = ?, updated_at = ?
       WHERE id = ?
-    `).run(barcode || existing.barcode, name || existing.name, 
+    `).run(barcode || existing.barcode, name || existing.name,
+      plc_product_id !== undefined ? plc_product_id : existing.plc_product_id,
+      recipe_id !== undefined ? recipe_id : existing.recipe_id,
+      target_qty !== undefined ? target_qty : existing.target_qty,
       target_revs !== undefined ? target_revs : existing.target_revs, 
       speed_rpm !== undefined ? speed_rpm : existing.speed_rpm, 
       label_template_id !== undefined ? label_template_id : existing.label_template_id, 

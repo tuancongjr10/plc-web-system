@@ -1,16 +1,19 @@
 <template>
   <div>
+    <div v-if="loadError" class="card mb-4" style="border-color: var(--color-danger)">
+      <div class="text-danger text-sm">Unable to load machine control: {{ loadError }}</div>
+    </div>
     <div class="page-header">
-      <h2 class="page-title">🔌 Giám sát PLC</h2>
+      <h2 class="page-title">🔌 Machine Control</h2>
       <div class="flex gap-2">
         <select v-model="selectedDeviceId" class="form-select" @change="loadTags" style="min-width: 200px">
-          <option value="" disabled>-- Chọn PLC --</option>
+          <option value="" disabled>-- Select PLC --</option>
           <option v-for="device in devices" :key="device.id" :value="device.id">
             {{ device.name }} ({{ device.ip_address }})
           </option>
         </select>
         <button class="btn btn-secondary" @click="loadData" :disabled="isLoading">
-          🔄 Làm mới
+          🔄 Refresh
         </button>
       </div>
     </div>
@@ -18,25 +21,29 @@
     <!-- Empty State -->
     <div v-if="!selectedDeviceId" class="card empty-state" style="margin-top: var(--space-6)">
       <span>🔌</span>
-      <p>Vui lòng chọn một PLC để xem chi tiết</p>
+      <p>Select a PLC to view details</p>
     </div>
 
     <div v-else class="grid grid-2" style="gap: var(--space-6)">
       <div class="card" style="grid-column: span 2">
         <div class="card-header">
-          <h3 class="card-title">Lệnh Siemens S7-1200 TCP (MOVE / STOP / ZERO)</h3>
-          <span class="badge" :class="selectedDeviceLive?.isDemo ? 'badge-warning' : (selectedDeviceLive?.connected ? 'badge-success' : 'badge-danger')">
-            {{ selectedDeviceLive?.isDemo ? 'DEMO' : (selectedDeviceLive?.connected ? 'REAL' : 'OFFLINE') }}
+          <h3 class="card-title">Machine Commands</h3>
+          <span class="badge" :class="selectedDeviceLive?.isDemo ? 'badge-warning' : (selectedDeviceOnline ? 'badge-success' : 'badge-danger')">
+            {{ selectedDeviceLive?.isDemo ? 'Demo / Simulated' : (selectedDeviceOnline ? 'Real / Online' : 'Real / Offline') }}
           </span>
         </div>
-        <div class="flex gap-3 items-end" style="flex-wrap: wrap">
-          <div class="form-group">
-            <label class="form-label">target_revs → MOVE=xxxx</label>
-            <input type="number" v-model.number="moveRevs" class="form-input" min="0" max="9999" style="width: 140px" />
+        <div class="grid grid-4 mb-4">
+          <div v-for="state in machineStates" :key="state.label" class="p-3 bg-tertiary rounded">
+            <div class="text-xs text-muted">{{ state.label }}</div>
+            <div class="text-mono font-semibold">{{ state.value }}</div>
+            <div v-if="state.note" class="technical-note">{{ state.note }}</div>
           </div>
-          <button class="btn btn-success" :disabled="isSendingCmd || !isOperator" @click="sendMove">▶️ MOVE</button>
-          <button class="btn btn-danger" :disabled="isSendingCmd || !isOperator" @click="sendStop">⏹️ STOP=0000</button>
-          <button class="btn btn-secondary" :disabled="isSendingCmd || !isOperator" @click="sendZero">🏠 ZERO=0000</button>
+        </div>
+        <div class="flex gap-3 items-end" style="flex-wrap: wrap">
+          <button class="btn btn-success" :disabled="isSendingCmd || !isOperator || !activeJob || !commandDeviceAvailable" @click="sendStart">CmdStart</button>
+          <button class="btn btn-danger" :disabled="isSendingCmd || !isOperator || !activeJob || !commandDeviceAvailable" @click="sendStop">CmdStop</button>
+          <button class="btn btn-warning" :disabled="homeDisabled" :title="homeDisabledReason" @click="sendHome">Home</button>
+          <button class="btn btn-secondary" :disabled="isSendingCmd || !isOperator || !activeJob || !commandDeviceAvailable" @click="sendReset">Reset</button>
         </div>
         <p v-if="cmdResult" class="text-xs text-mono mt-3">{{ cmdResult }}</p>
       </div>
@@ -44,20 +51,19 @@
       <!-- Tag List -->
       <div class="card" style="grid-column: span 2">
         <div class="card-header">
-          <h3 class="card-title">Danh sách Tag ({{ tags.length }})</h3>
+          <h3 class="card-title">Realtime Tags ({{ tags.length }})</h3>
         </div>
 
         <div class="table-container">
           <table class="table">
             <thead>
               <tr>
-                <th>Tên Tag</th>
-                <th>Địa chỉ</th>
-                <th>Mô tả</th>
-                <th>Giá trị</th>
-                <th>Đơn vị</th>
-                <th>Chất lượng</th>
-                <th>Hành động</th>
+                <th>Tag Name</th>
+                <th>Address</th>
+                <th>Description</th>
+                <th>Value</th>
+                <th>Unit</th>
+                <th>Quality</th>
               </tr>
             </thead>
             <tbody>
@@ -76,15 +82,6 @@
                     {{ getTagQuality(tag) }}
                   </span>
                 </td>
-                <td>
-                  <button 
-                    v-if="tag.is_writable && isOperator"
-                    class="btn btn-primary btn-sm"
-                    @click="openWriteModal(tag)"
-                  >
-                    Ghi giá trị
-                  </button>
-                </td>
               </tr>
             </tbody>
           </table>
@@ -92,50 +89,6 @@
       </div>
     </div>
 
-    <!-- Write Value Modal -->
-    <div v-if="showWriteModal" class="modal-backdrop" @click.self="closeWriteModal">
-      <div class="modal-content card">
-        <div class="card-header">
-          <h3 class="card-title">Ghi giá trị Tag</h3>
-          <button class="btn btn-ghost btn-icon" @click="closeWriteModal">✕</button>
-        </div>
-        <div class="modal-body p-4">
-          <div class="form-group mb-4">
-            <label class="form-label">Tag Name</label>
-            <input type="text" class="form-input" :value="selectedTag?.tag_name" disabled />
-          </div>
-          <div class="form-group mb-4">
-            <label class="form-label">Địa chỉ</label>
-            <input type="text" class="form-input" :value="selectedTag?.address" disabled />
-          </div>
-          <div class="form-group mb-6">
-            <label class="form-label" for="tagValue">Giá trị mới</label>
-            
-            <!-- Boolean input -->
-            <select v-if="selectedTag?.data_type === 'BOOL'" v-model="writeForm.value" class="form-select">
-              <option :value="true">ON (True)</option>
-              <option :value="false">OFF (False)</option>
-            </select>
-            
-            <!-- Number input -->
-            <input 
-              v-else 
-              type="number" 
-              v-model.number="writeForm.value" 
-              class="form-input" 
-              :step="selectedTag?.data_type === 'REAL' ? '0.01' : '1'"
-              required
-            />
-          </div>
-          <div class="flex justify-end gap-3">
-            <button class="btn btn-ghost" @click="closeWriteModal">Hủy</button>
-            <button class="btn btn-primary" @click="submitWrite" :disabled="isWriting">
-              {{ isWriting ? 'Đang ghi...' : 'Ghi xuống PLC' }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -152,27 +105,80 @@ const devices = ref([])
 const selectedDeviceId = ref('')
 const tags = ref([])
 const isLoading = ref(false)
+const loadError = ref('')
 
 const isOperator = computed(() => authStore.isOperator)
 
-// Write Modal
-const showWriteModal = ref(false)
-const selectedTag = ref(null)
-const writeForm = ref({ value: null })
-const isWriting = ref(false)
-const moveRevs = ref(1500)
 const isSendingCmd = ref(false)
 const cmdResult = ref('')
+const activeJob = ref(null)
 
 const selectedDeviceLive = computed(() => {
   const d = devices.value.find(x => x.id === selectedDeviceId.value)
   return d?.liveStatus || { connected: d?.connection_status === 'connected', isDemo: false }
 })
 
-async function sendMove() {
+const selectedDeviceOnline = computed(() => selectedDeviceLive.value?.connected === true && !selectedDeviceLive.value?.isDemo)
+const commandDeviceAvailable = computed(() => selectedDeviceLive.value?.isDemo === true || selectedDeviceOnline.value)
+
+const machineStates = computed(() => {
+  const fields = ['MachineState', 'JobLoaded', 'ProductID', 'RecipeID', 'TargetQty', 'MachineReady', 'MachineRunning', 'MoveBusy', 'HaltBusy', 'AxisPositioning', 'MachineFault', 'FaultCode']
+  const labels = {
+    MachineState: 'Machine State', JobLoaded: 'Job Loaded', ProductID: 'Product ID', RecipeID: 'Recipe ID',
+    TargetQty: 'Target Quantity', MachineReady: 'Machine Ready', MachineRunning: 'Machine Running',
+    MoveBusy: 'Move Busy', HaltBusy: 'Halt Busy', AxisPositioning: 'Axis Positioning',
+    MachineFault: 'Machine Fault', FaultCode: 'Fault Code',
+  }
+  const notes = {
+    MachineState: 'Trạng thái hiện tại của máy', JobLoaded: 'Job đã được nạp vào PLC',
+    ProductID: 'ID sản phẩm gửi xuống PLC', RecipeID: 'ID công thức vận hành của sản phẩm',
+    TargetQty: 'Số lượng sản phẩm mục tiêu của Job', MachineReady: 'Máy đủ điều kiện để bắt đầu',
+    MachineRunning: 'Máy đang trong chu trình chạy', MoveBusy: 'Trục đang thực hiện lệnh di chuyển',
+    HaltBusy: 'Trục đang thực hiện lệnh dừng', AxisPositioning: 'Trục đang định vị',
+    MachineFault: 'Máy đang có lỗi', FaultCode: 'Mã lỗi hiện tại từ PLC',
+  }
+  return fields.map(label => {
+    const tag = tags.value.find(item => item.tag_name.toLowerCase() === label.toLowerCase())
+    return { label: labels[label], note: notes[label], value: tag ? formatTagValue(tag) : '—' }
+  })
+})
+
+function getSafeBooleanTag(tagName) {
+  const tag = tags.value.find(item => item.tag_name.toLowerCase() === tagName.toLowerCase())
+  if (!tag) return null
+  const live = getTagLiveValue(tag)
+  if (String(live.quality || '').toLowerCase() !== 'good') return null
+  if (live.value === true || live.value === 1 || live.value === '1' || String(live.value).toLowerCase() === 'true') return true
+  if (live.value === false || live.value === 0 || live.value === '0' || String(live.value).toLowerCase() === 'false') return false
+  return null
+}
+
+const homeSafetyState = computed(() => ({
+  machineRunning: getSafeBooleanTag('MachineRunning'),
+  moveBusy: getSafeBooleanTag('MoveBusy'),
+  haltBusy: getSafeBooleanTag('HaltBusy'),
+  axisPositioning: getSafeBooleanTag('AxisPositioning'),
+}))
+
+const homeAllowed = computed(() => {
+  const state = homeSafetyState.value
+  return selectedDeviceOnline.value &&
+    state.machineRunning === false &&
+    state.moveBusy === false &&
+    state.haltBusy === false &&
+    state.axisPositioning === false
+})
+
+const homeDisabled = computed(() => isSendingCmd.value || !isOperator.value || !homeAllowed.value)
+const homeDisabledReason = computed(() => homeAllowed.value
+  ? ''
+  : 'HOME requires REAL / ONLINE PLC and GOOD status: MachineRunning=false, MoveBusy=false, HaltBusy=false, AxisPositioning=false')
+
+async function sendStart() {
+  if (!activeJob.value || !commandDeviceAvailable.value) return
   isSendingCmd.value = true
   try {
-    const res = await api.post('/plc/move', { deviceId: selectedDeviceId.value, revs: moveRevs.value })
+    const res = await api.post(`/jobs/${activeJob.value.id}/start`, { deviceId: selectedDeviceId.value })
     cmdResult.value = `${res.data.data.mode}: ${res.data.data.command} → ${res.data.data.response}`
   } catch (err) {
     cmdResult.value = err.response?.data?.error || err.message
@@ -182,9 +188,10 @@ async function sendMove() {
 }
 
 async function sendStop() {
+  if (!activeJob.value || !commandDeviceAvailable.value) return
   isSendingCmd.value = true
   try {
-    const res = await api.post('/plc/stop', { deviceId: selectedDeviceId.value })
+    const res = await api.post(`/jobs/${activeJob.value.id}/stop`, { deviceId: selectedDeviceId.value })
     cmdResult.value = `${res.data.data.mode}: ${res.data.data.command} → ${res.data.data.response}`
   } catch (err) {
     cmdResult.value = err.response?.data?.error || err.message
@@ -193,10 +200,25 @@ async function sendStop() {
   }
 }
 
-async function sendZero() {
+async function sendHome() {
+  if (!homeAllowed.value) return
   isSendingCmd.value = true
   try {
-    const res = await api.post('/plc/zero', { deviceId: selectedDeviceId.value })
+    const res = await api.post(`/plc/devices/${selectedDeviceId.value}/home`)
+    const result = res.data.data
+    cmdResult.value = `${result.mode}: ${result.command} → ${result.result.toUpperCase()} (TCP write callback; PLC ACK not yet received)`
+  } catch (err) {
+    cmdResult.value = err.response?.data?.error || err.message
+  } finally {
+    isSendingCmd.value = false
+  }
+}
+
+async function sendReset() {
+  if (!activeJob.value || !commandDeviceAvailable.value) return
+  isSendingCmd.value = true
+  try {
+    const res = await api.post(`/jobs/${activeJob.value.id}/reset`, { deviceId: selectedDeviceId.value })
     cmdResult.value = `${res.data.data.mode}: ${res.data.data.command} → ${res.data.data.response}`
   } catch (err) {
     cmdResult.value = err.response?.data?.error || err.message
@@ -207,9 +229,11 @@ async function sendZero() {
 
 async function loadData() {
   isLoading.value = true
+  loadError.value = ''
   try {
-    const res = await api.get('/plc/devices')
-    devices.value = res.data.data || []
+    const [deviceRes, jobRes] = await Promise.all([api.get('/plc/devices'), api.get('/jobs/active')])
+    devices.value = deviceRes.data.data || []
+    activeJob.value = jobRes.data.data || null
     
     // Auto select first device if none selected
     if (!selectedDeviceId.value && devices.value.length > 0) {
@@ -220,6 +244,7 @@ async function loadData() {
     }
   } catch (err) {
     console.error('Failed to load devices:', err)
+    loadError.value = err.response?.data?.error || err.message || 'Unable to load PLC devices'
   } finally {
     isLoading.value = false
   }
@@ -233,6 +258,7 @@ async function loadTags() {
     tags.value = res.data.data || []
   } catch (err) {
     console.error('Failed to load tags:', err)
+    loadError.value = err.response?.data?.error || err.message || 'Unable to load PLC tags'
   } finally {
     isLoading.value = false
   }
@@ -259,6 +285,7 @@ function formatTagValue(tag) {
 
 function getTagValueClass(tag) {
   const live = getTagLiveValue(tag)
+  if (!selectedDeviceLive.value?.isDemo && !selectedDeviceOnline.value) return 'text-muted'
   if (tag.data_type === 'BOOL') {
     return live.value ? 'text-success' : 'text-muted'
   }
@@ -268,6 +295,7 @@ function getTagValueClass(tag) {
 function getTagQuality(tag) {
   if (selectedDeviceLive.value?.isDemo) return 'DEMO'
   const live = getTagLiveValue(tag)
+  if (!selectedDeviceOnline.value) return live.value === null || live.value === undefined ? 'OFFLINE' : 'OFFLINE / LAST VALUE'
   if (live.value === null || live.value === undefined) return 'UNKNOWN'
   return String(live.quality || 'unknown').toUpperCase()
 }
@@ -275,44 +303,12 @@ function getTagQuality(tag) {
 function getQualityBadge(tag) {
   const q = getTagQuality(tag)
   if (q === 'DEMO') return 'badge-warning'
+  if (q.startsWith('OFFLINE')) return 'badge-danger'
   if (q === 'GOOD') return 'badge-success'
   if (q === 'BAD') return 'badge-danger'
   return 'badge-neutral'
 }
 
-// Write action
-function openWriteModal(tag) {
-  selectedTag.value = tag
-  // Set default value based on type
-  writeForm.value.value = tag.data_type === 'BOOL' ? false : 0
-  showWriteModal.value = true
-}
-
-function closeWriteModal() {
-  showWriteModal.value = false
-  selectedTag.value = null
-}
-
-async function submitWrite() {
-  if (!selectedTag.value || writeForm.value.value === null) return
-  
-  isWriting.value = true
-  try {
-    // We can use the WebSocket method for faster response, or REST API
-    plcStore.writePlcTag(selectedDeviceId.value, selectedTag.value.id, writeForm.value.value)
-    
-    // Simulate optimistic update or wait for ws response.
-    // Assuming success for demo
-    setTimeout(() => {
-      closeWriteModal()
-      isWriting.value = false
-    }, 500)
-    
-  } catch (err) {
-    console.error('Failed to write tag:', err)
-    isWriting.value = false
-  }
-}
 
 onMounted(loadData)
 </script>
@@ -346,4 +342,5 @@ onMounted(loadData)
   color: var(--color-text-muted);
 }
 .empty-state span { font-size: 3rem; margin-bottom: var(--space-4); }
+.technical-note { margin-top: 2px; color: var(--color-text-muted); font-size: var(--text-xs); font-weight: 400; line-height: 1.25; }
 </style>

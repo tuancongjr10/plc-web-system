@@ -11,7 +11,7 @@
           </div>
         </div>
         <button class="btn btn-ghost btn-icon sidebar-toggle" @click="sidebarCollapsed = !sidebarCollapsed"
-          :data-tooltip="sidebarCollapsed ? 'Mở menu' : 'Thu gọn'">
+          :data-tooltip="sidebarCollapsed ? 'Expand menu' : 'Collapse menu'">
           {{ sidebarCollapsed ? '▶' : '◀' }}
         </button>
       </div>
@@ -19,7 +19,7 @@
       <!-- Connection status -->
       <div class="sidebar-ws-status" v-if="!sidebarCollapsed">
         <div class="status-dot" :class="plcStore.wsConnected ? 'online' : 'offline'"></div>
-        <span class="text-xs text-muted">{{ plcStore.wsConnected ? 'WebSocket ON' : 'Mất kết nối' }}</span>
+        <span class="text-xs text-muted">{{ plcStore.wsConnected ? 'WebSocket ON' : 'Disconnected' }}</span>
       </div>
 
       <!-- Navigation Items -->
@@ -50,7 +50,7 @@
             </span>
           </div>
           <button v-if="!sidebarCollapsed" class="btn btn-ghost btn-icon ml-auto" @click="handleLogout"
-            data-tooltip="Đăng xuất">
+            data-tooltip="Sign Out">
             🚪
           </button>
         </div>
@@ -84,7 +84,7 @@
       <transition name="slide-up">
         <div v-if="showAlarmPanel" class="alarm-panel">
           <div class="alarm-panel-header">
-            <span class="font-semibold">⚠️ Cảnh báo đang hoạt động</span>
+            <span class="font-semibold">⚠️ Active Alerts</span>
             <button class="btn btn-ghost btn-icon" @click="showAlarmPanel = false">✕</button>
           </div>
           <div v-for="alarm in plcStore.alarms.slice(0, 5)" :key="alarm.id" class="alarm-item">
@@ -123,11 +123,11 @@ let timeInterval = null
 
 const navRoutes = [
   { path: '/dashboard', name: 'Dashboard', meta: { title: 'Dashboard', icon: '📊' } },
-  { path: '/plc', name: 'PLC', meta: { title: 'PLC Monitor', icon: '🔌' } },
-  { path: '/printer', name: 'Printer', meta: { title: 'Máy in Godex', icon: '🖨️' } },
-  { path: '/scanner', name: 'Scanner', meta: { title: 'Scanner / QR', icon: '📷' } },
-  { path: '/logs', name: 'Logs', meta: { title: 'Lịch sử', icon: '📋' } },
-  ...(auth.isAdmin ? [{ path: '/settings', name: 'Settings', meta: { title: 'Cài đặt', icon: '⚙️' } }] : []),
+  { path: '/plc', name: 'PLC', meta: { title: 'Machine Control', icon: '🔌' } },
+  { path: '/printer', name: 'Printer', meta: { title: 'Print Queue', icon: '🖨️' } },
+  { path: '/scanner', name: 'Scanner', meta: { title: 'Scan & TraceCode', icon: '📷' } },
+  { path: '/logs', name: 'Logs', meta: { title: 'Traceability', icon: '📋' } },
+  ...(auth.isAdmin ? [{ path: '/settings', name: 'Settings', meta: { title: 'Device Registry', icon: '⚙️' } }] : []),
 ]
 
 const currentRoute = computed(() => route)
@@ -135,7 +135,7 @@ const userInitial = computed(() => (auth.user?.fullName || 'U')[0].toUpperCase()
 const activeAlarms = computed(() => plcStore.alarms.filter(a => !a.resolved).length)
 
 function updateTime() {
-  currentTime.value = new Date().toLocaleTimeString('vi-VN', {
+  currentTime.value = new Date().toLocaleTimeString('en-US', {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
@@ -202,7 +202,7 @@ onUnmounted(() => {
   justify-content: center;
   font-size: 1rem;
   flex-shrink: 0;
-  border: 1px solid hsl(210, 60%, 30%);
+  border: 1px solid #93c5fd;
 }
 
 .logo-text { display: flex; flex-direction: column; overflow: hidden; }
@@ -302,7 +302,7 @@ onUnmounted(() => {
   font-size: var(--text-sm);
   font-weight: 700;
   flex-shrink: 0;
-  border: 1px solid hsl(210, 60%, 30%);
+  border: 1px solid #93c5fd;
 }
 
 .user-info {

@@ -1,9 +1,9 @@
 <template>
   <div>
     <div class="page-header">
-      <h2 class="page-title">📋 Lịch sử & Nhật ký</h2>
+      <h2 class="page-title">📋 Traceability</h2>
       <button class="btn btn-secondary" @click="loadLogs" :disabled="isLoading">
-        🔄 Làm mới
+        🔄 Refresh
       </button>
     </div>
 
@@ -13,12 +13,12 @@
 
     <div class="card">
       <div class="card-header">
-        <h3 class="card-title">Nhật ký dữ liệu PLC (Tag Values)</h3>
+        <h3 class="card-title">PLC Tag History</h3>
       </div>
       
       <div class="flex gap-4 mb-4">
         <select v-model="filters.deviceId" class="form-select" style="max-width: 200px" @change="loadLogs">
-          <option value="">-- Tất cả PLC --</option>
+          <option value="">-- All PLC Devices --</option>
           <option v-for="d in devices" :key="d.id" :value="d.id">{{ d.name }}</option>
         </select>
       </div>
@@ -27,19 +27,19 @@
         <table class="table">
           <thead>
             <tr>
-              <th>Thời gian</th>
-              <th>Thiết bị</th>
+              <th>Time</th>
+              <th>Device</th>
               <th>Tag Name</th>
-              <th>Giá trị</th>
-              <th>Chất lượng</th>
+              <th>Value</th>
+              <th>Quality</th>
               <th>Source / Mode</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="logs.length === 0">
               <td colspan="6" class="text-center text-muted py-4">
-                <span v-if="isLoading">Đang tải...</span>
-                <span v-else>Không có dữ liệu</span>
+                <span v-if="isLoading">Loading...</span>
+                <span v-else>No Data</span>
               </td>
             </tr>
             <tr v-for="log in logs" :key="log.id">
@@ -61,36 +61,36 @@
       </div>
       
       <div class="flex justify-between items-center mt-4">
-        <span class="text-sm text-muted">Hiển thị {{ logs.length }} bản ghi tag mới nhất.</span>
+        <span class="text-sm text-muted">Showing {{ logs.length }} latest tag records.</span>
       </div>
     </div>
 
     <div class="card" style="margin-top: var(--space-6)">
       <div class="card-header">
-        <h3 class="card-title">Nhật ký sản xuất (SCAN / START / STOP / HOME / PRINT)</h3>
+        <h3 class="card-title">Production Traceability (SCAN / START / STOP / RESET / PRINT)</h3>
       </div>
       <div class="table-container">
         <table class="table">
           <thead>
             <tr>
-              <th>Thời gian</th>
+              <th>Time</th>
               <th>Job</th>
-              <th>Sản phẩm</th>
+              <th>Product</th>
               <th>Action</th>
               <th>Command</th>
               <th>Status</th>
-              <th>Chi tiết</th>
+              <th>Details</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="prodLogs.length === 0">
-              <td colspan="7" class="text-center text-muted py-4">Không có dữ liệu</td>
+              <td colspan="7" class="text-center text-muted py-4">No Data</td>
             </tr>
             <tr v-for="log in prodLogs" :key="'p'+log.id">
               <td class="text-xs text-muted text-mono">{{ formatTime(log.created_at) }}</td>
               <td class="text-xs text-mono">{{ log.job_code }}</td>
               <td class="text-sm">{{ log.product_name || log.product_barcode }}</td>
-              <td class="font-medium">{{ log.action }}</td>
+              <td class="font-medium">{{ displayProductionAction(log.action) }}</td>
               <td class="text-xs text-mono">{{ log.command_sent || '-' }}</td>
               <td><span class="badge" :class="log.status === 'success' ? 'badge-success' : 'badge-danger'">{{ log.status }}</span></td>
               <td class="text-xs text-muted">{{ log.details }}</td>
@@ -102,14 +102,14 @@
 
     <div class="card" style="margin-top: var(--space-6)">
       <div class="card-header">
-        <h3 class="card-title">Sự kiện PLC TCP (plc_events)</h3>
+        <h3 class="card-title">PLC Communication Log (plc_events)</h3>
       </div>
       <div class="table-container">
         <table class="table">
           <thead>
             <tr>
-              <th>Thời gian</th>
-              <th>Loại</th>
+              <th>Time</th>
+              <th>Type</th>
               <th>Message</th>
               <th>Command</th>
               <th>Response</th>
@@ -118,7 +118,7 @@
           </thead>
           <tbody>
             <tr v-if="plcEvents.length === 0">
-              <td colspan="6" class="text-center text-muted py-4">Không có dữ liệu</td>
+              <td colspan="6" class="text-center text-muted py-4">No Data</td>
             </tr>
             <tr v-for="ev in plcEvents" :key="'e'+ev.id">
               <td class="text-xs text-muted text-mono">{{ formatTime(ev.created_at) }}</td>
@@ -175,7 +175,7 @@ async function loadLogs() {
     if (results[3].status === 'fulfilled') plcEvents.value = results[3].value.data?.data || []
   } catch (err) {
     console.error('Failed to load logs:', err)
-    loadErrors.value.push(err.response?.data?.error || err.message || 'Không thể tải lịch sử')
+    loadErrors.value.push(err.response?.data?.error || err.message || 'Unable to load traceability data')
   } finally {
     isLoading.value = false
   }
@@ -183,7 +183,7 @@ async function loadLogs() {
 
 function formatTime(ts) {
   if (!ts) return '-'
-  return new Date(ts).toLocaleString('vi-VN', {
+  return new Date(ts).toLocaleString('en-US', {
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3
   })
@@ -193,6 +193,10 @@ function formatValue(value, type) {
   if (type === 'BOOL') return value === 'true' ? 'ON' : 'OFF'
   if (type === 'REAL') return parseFloat(value).toFixed(2)
   return value
+}
+
+function displayProductionAction(action) {
+  return action === 'HOME' ? 'RESET' : action
 }
 
 function getDeviceForLog(log) {

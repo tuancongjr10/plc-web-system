@@ -50,6 +50,12 @@ CREATE TABLE IF NOT EXISTS printers (
   is_active   INTEGER NOT NULL DEFAULT 1,
   connection_status TEXT DEFAULT 'unknown' CHECK(connection_status IN ('online', 'offline', 'error', 'printing', 'unknown', 'demo')),
   last_connected TEXT,
+  queue_name TEXT,
+  print_mode TEXT NOT NULL DEFAULT 'WINDOWS_QUEUE' CHECK(print_mode IN ('WINDOWS_QUEUE', 'RAW_TCP_LEGACY')),
+  is_enabled INTEGER NOT NULL DEFAULT 1,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  last_seen_at TEXT,
+  last_error TEXT,
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
@@ -74,6 +80,9 @@ CREATE TABLE IF NOT EXISTS products (
   id                  TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   barcode             TEXT UNIQUE NOT NULL,
   name                TEXT NOT NULL,
+  plc_product_id      INTEGER,
+  recipe_id           INTEGER,
+  target_qty          INTEGER,
   target_revs         INTEGER NOT NULL DEFAULT 1000,
   speed_rpm           INTEGER NOT NULL DEFAULT 500,
   label_template_id   TEXT REFERENCES label_templates(id) ON DELETE SET NULL,
@@ -89,6 +98,14 @@ CREATE TABLE IF NOT EXISTS production_jobs (
   speed_rpm           INTEGER NOT NULL,
   label_template_id   TEXT REFERENCES label_templates(id) ON DELETE SET NULL,
   status              TEXT NOT NULL DEFAULT 'created' CHECK(status IN ('created', 'running', 'stopped', 'completed', 'failed')),
+  plc_device_id       TEXT REFERENCES plc_devices(id) ON DELETE SET NULL,
+  plc_product_id      INTEGER,
+  plc_recipe_id       INTEGER,
+  plc_target_qty      INTEGER,
+  plc_job_loaded      INTEGER NOT NULL DEFAULT 0 CHECK(plc_job_loaded IN (0,1)),
+  plc_loaded_at       TEXT,
+  last_plc_ack        TEXT,
+  plc_reconcile_status TEXT NOT NULL DEFAULT 'not_loaded' CHECK(plc_reconcile_status IN ('not_loaded','loaded','mismatch','unknown')),
   created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
@@ -97,7 +114,7 @@ CREATE TABLE IF NOT EXISTS production_logs (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   job_id      TEXT REFERENCES production_jobs(id) ON DELETE CASCADE,
   product_id  TEXT REFERENCES products(id) ON DELETE SET NULL,
-  action      TEXT NOT NULL CHECK(action IN ('START', 'STOP', 'HOME', 'SCAN', 'PRINT')),
+  action      TEXT NOT NULL CHECK(action IN ('START','STOP','HOME','RESET','SCAN','PRINT','JOB_LOAD_REQUEST','JOB_LOAD_ACK','JOB_ALREADY_LOADED','JOB_LOAD_FAILED','JOB_RECONCILE_MISMATCH')),
   command_sent TEXT,
   response    TEXT,
   status      TEXT DEFAULT 'success',
@@ -185,15 +202,22 @@ CREATE TABLE IF NOT EXISTS print_jobs (
   id            TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   printer_id    TEXT REFERENCES printers(id) ON DELETE SET NULL,
   user_id       TEXT REFERENCES users(id) ON DELETE SET NULL,
+  production_job_id TEXT REFERENCES production_jobs(id) ON DELETE SET NULL,
   job_name      TEXT NOT NULL,
   template_name TEXT,
-  payload_content TEXT NOT NULL,
+  template_id   TEXT REFERENCES label_templates(id) ON DELETE SET NULL,
+  queue_name_snapshot TEXT,
+  rendered_file TEXT,
+  payload_content TEXT NOT NULL DEFAULT '',
   copies        INTEGER DEFAULT 1,
-  status        TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'printing', 'completed', 'failed', 'cancelled')),
+  status        TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'rendered', 'submitted', 'printing', 'completed', 'failed', 'cancelled', 'unknown')),
   error_message TEXT,
   metadata      TEXT,
   started_at    TEXT,
+  rendered_at   TEXT,
+  submitted_at  TEXT,
   completed_at  TEXT,
+  retry_count   INTEGER NOT NULL DEFAULT 0,
   created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
@@ -212,6 +236,21 @@ CREATE TABLE IF NOT EXISTS scan_records (
   processed   INTEGER DEFAULT 0,
   process_result TEXT,
   created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- Immutable document fingerprint -> TraceCode mapping. The uploaded PDF bytes
+-- and client-local path are intentionally not stored by this workflow.
+CREATE TABLE IF NOT EXISTS document_traces (
+  trace_code        TEXT PRIMARY KEY,
+  original_file_name TEXT NOT NULL,
+  sha256            TEXT NOT NULL UNIQUE,
+  file_size         INTEGER NOT NULL CHECK(file_size > 0),
+  description       TEXT,
+  product_id        TEXT REFERENCES products(id) ON DELETE SET NULL,
+  production_job_id TEXT REFERENCES production_jobs(id) ON DELETE SET NULL,
+  uploaded_by       TEXT REFERENCES users(id) ON DELETE SET NULL,
+  uploaded_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  CHECK(trace_code GLOB 'DOC-[0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]')
 );
 
 -- ============================================================
@@ -258,6 +297,8 @@ CREATE INDEX IF NOT EXISTS idx_plc_alarms_unacked ON plc_alarms(is_acknowledged,
 CREATE INDEX IF NOT EXISTS idx_print_jobs_status ON print_jobs(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_print_jobs_printer ON print_jobs(printer_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_scan_records_ts ON scan_records(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_document_traces_product ON document_traces(product_id, uploaded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_document_traces_job ON document_traces(production_job_id, uploaded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_ts ON audit_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);

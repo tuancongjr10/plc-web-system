@@ -4,14 +4,19 @@ const logger = require('../../config/logger');
 const config = require('../../config');
 const { getDb } = require('../../models/database');
 
+const STATUS_REQUEST = 'STATUS=0000';
+const STATUS_FRAME_LENGTH = Buffer.byteLength('STAT=1,1,0001,0001,0001,1,0,0,0000,1,0,0,0,0,00', 'ascii');
+const ACK_FRAME_LENGTH = Buffer.byteLength('ACK=0001', 'ascii');
+const COMMAND_ACK = {
+  JOB: 'ACK=0001', START: 'ACK=0002', STOP: 'ACK=0003', RESET: 'ACK=0004', HOME: 'ACK=0005',
+};
+
 /**
  * Siemens S7-1200 TCP Socket PLC Service
  * Protocol: ASCII TCP Socket
  * Target: 192.168.0.1:2000
- * Commands:
- *  - MOVE=xxxx
- *  - STOP=0000
- *  - ZERO=0000
+ * Commands: JOB=PPPP,RRRR,QQQQ / START=0000 / STOP=0000 / HOME=0000 / RESET=0000
+ * Telemetry poll: STATUS=0000 -> STAT=S,J,PPPP,RRRR,QQQQ,R,U,F,EEEE,A,M,H,P,O,TT
  *
  * DEMO_MODE: if TCP connect fails, simulate the session so the workflow can be demoed.
  * REAL MODE (DEMO_MODE=false): never fake ONLINE. Offline commands fail.
@@ -21,6 +26,7 @@ class SiemensPlcService extends EventEmitter {
     super();
     this.devices = new Map();
     this.pollTimers = new Map();
+    this.statusPollTimers = new Map();
     this.tagValues = new Map();
     this.reconnectTimers = new Map();
     this.isShuttingDown = false;
@@ -69,6 +75,12 @@ class SiemensPlcService extends EventEmitter {
       isDemo: false,
       lastCommand: null,
       lastResponse: null,
+      lastTelemetryAt: null,
+      lastTelemetry: null,
+      receiveBuffer: '',
+      activeTransaction: null,
+      machineQueue: [],
+      statusPollPending: false,
     });
 
     logger.info(`Siemens S7-1200 added: ${formattedConfig.name} (${ip}:${port})`);
@@ -105,13 +117,11 @@ class SiemensPlcService extends EventEmitter {
         isDemo: false,
         mode: 'REAL',
       });
+      this._startStatusPolling(deviceId);
     });
 
     socket.on('data', (data) => {
-      const responseStr = data.toString('utf8').trim();
-      if (!responseStr) return;
-      logger.info(`Siemens PLC [${name}] RX: ${responseStr}`);
-      this._handleSocketData(deviceId, responseStr);
+      this._handleSocketData(deviceId, data.toString('ascii'));
     });
 
     socket.on('error', (err) => {
@@ -145,6 +155,8 @@ class SiemensPlcService extends EventEmitter {
 
     const wasDemo = device.isDemo;
     const wasConnectedReal = device.connected && !device.isDemo;
+    this._stopStatusPolling(deviceId);
+    this._cancelTransactions(device, new Error(`PLC disconnected: ${reason}`));
 
     if (device.socket) {
       const sock = device.socket;
@@ -206,30 +218,259 @@ class SiemensPlcService extends EventEmitter {
 
   _handleSocketData(deviceId, responseStr) {
     const device = this.devices.get(deviceId);
+    if (!device) return;
+
+    device.receiveBuffer += String(responseStr || '');
+    while (device.receiveBuffer.length > 0) {
+      const statStart = device.receiveBuffer.indexOf('STAT=');
+      const ackStart = device.receiveBuffer.indexOf('ACK=');
+      const starts = [statStart, ackStart].filter(index => index >= 0);
+      const frameStart = starts.length ? Math.min(...starts) : -1;
+      if (frameStart < 0) {
+        let retainedLength = 0;
+        for (const prefix of ['STAT=', 'ACK=']) {
+          for (let length = 1; length < prefix.length; length += 1) {
+            if (device.receiveBuffer.endsWith(prefix.slice(0, length))) retainedLength = Math.max(retainedLength, length);
+          }
+        }
+        const opaque = device.receiveBuffer.slice(0, device.receiveBuffer.length - retainedLength).trim();
+        device.receiveBuffer = retainedLength ? device.receiveBuffer.slice(-retainedLength) : '';
+        if (opaque) this._emitOpaqueResponse(deviceId, opaque);
+        return;
+      }
+      if (frameStart > 0) {
+        const opaque = device.receiveBuffer.slice(0, frameStart).trim();
+        device.receiveBuffer = device.receiveBuffer.slice(frameStart);
+        if (opaque) this._emitOpaqueResponse(deviceId, opaque);
+      }
+
+      if (device.receiveBuffer.startsWith('ACK=')) {
+        if (device.receiveBuffer.length < ACK_FRAME_LENGTH) return;
+        const frame = device.receiveBuffer.slice(0, ACK_FRAME_LENGTH);
+        if (!/^ACK=000[1-5]$/.test(frame)) {
+          logger.warn(`Rejected PLC ACK frame [${device.config.name}]: ${frame}`);
+          this._logPlcEvent('ERROR', 'Rejected ACK frame', null, frame);
+          device.receiveBuffer = device.receiveBuffer.slice(1);
+          continue;
+        }
+        device.receiveBuffer = device.receiveBuffer.slice(ACK_FRAME_LENGTH);
+        this._emitProtocolResponse(deviceId, frame);
+        this._resolveAckTransaction(deviceId, frame);
+        continue;
+      }
+
+      if (device.receiveBuffer.length < STATUS_FRAME_LENGTH) return;
+      const frame = device.receiveBuffer.slice(0, STATUS_FRAME_LENGTH);
+      try {
+        const telemetry = this.parseStatusFrame(frame);
+        device.receiveBuffer = device.receiveBuffer.slice(STATUS_FRAME_LENGTH);
+        this._applyRealTelemetry(deviceId, frame, telemetry);
+        this._resolveStatusTransaction(deviceId, frame, telemetry);
+      } catch (err) {
+        logger.warn(`Rejected PLC STAT frame [${device.config.name}]: ${err.message}`);
+        this._logPlcEvent('ERROR', `Rejected STAT frame: ${err.message}`, null, frame);
+        device.receiveBuffer = device.receiveBuffer.slice(1);
+      }
+    }
+  }
+
+  _emitProtocolResponse(deviceId, responseStr) {
+    const device = this.devices.get(deviceId);
+    const timestamp = new Date().toISOString();
+    if (device) device.lastResponse = responseStr;
+    this.emit('data:received', { deviceId, response: responseStr });
+    this._logPlcEvent('STATUS', `RX: ${responseStr}`, null, responseStr);
+    this.emit('plc:response', { deviceId, response: responseStr, timestamp });
+  }
+
+  _emitOpaqueResponse(deviceId, responseStr) {
+    const device = this.devices.get(deviceId);
     if (device) device.lastResponse = responseStr;
     this.emit('data:received', { deviceId, response: responseStr });
     this._logPlcEvent('STATUS', `RX: ${responseStr}`, null, responseStr);
     this.emit('plc:response', { deviceId, response: responseStr, timestamp: new Date().toISOString() });
   }
 
-  formatMoveCommand(revs) {
-    const n = Math.max(0, Math.min(9999, parseInt(revs, 10) || 0));
-    return `MOVE=${String(n).padStart(4, '0')}`;
+  parseStatusFrame(frame) {
+    const raw = String(frame || '');
+    if (!raw.startsWith('STAT=')) throw new Error('STAT prefix is required');
+    const fields = raw.slice(5).split(',');
+    if (fields.length !== 15) throw new Error(`STAT requires 15 fields, received ${fields.length}`);
+
+    const patterns = [/^\d$/, /^[01]$/, /^\d{4}$/, /^\d{4}$/, /^\d{4}$/, /^[01]$/, /^[01]$/, /^[01]$/, /^\d{4}$/, /^[01]$/, /^[01]$/, /^[01]$/, /^[01]$/, /^[01]$/, /^\d{2}$/];
+    fields.forEach((value, index) => {
+      if (!patterns[index].test(value)) throw new Error(`Invalid STAT field ${index + 1}: ${value}`);
+    });
+
+    const bool = (value) => value === '1';
+    return {
+      MachineState: Number(fields[0]),
+      JobLoaded: bool(fields[1]),
+      ProductID: Number(fields[2]),
+      RecipeID: Number(fields[3]),
+      TargetQty: Number(fields[4]),
+      MachineReady: bool(fields[5]),
+      MachineRunning: bool(fields[6]),
+      MachineFault: bool(fields[7]),
+      FaultCode: Number(fields[8]),
+      AxisReady: bool(fields[9]),
+      MoveBusy: bool(fields[10]),
+      HaltBusy: bool(fields[11]),
+      AxisPositioning: bool(fields[12]),
+      HomeBusy: bool(fields[13]),
+      MotionState: Number(fields[14]),
+    };
+  }
+
+  _applyRealTelemetry(deviceId, frame, telemetry) {
+    const device = this.devices.get(deviceId);
+    if (!device?.connected || device.isDemo) {
+      logger.warn(`Ignored STAT telemetry for non-REAL device ${deviceId}`);
+      return;
+    }
+
+    const db = getDb();
+    const tags = db.prepare('SELECT * FROM plc_tags WHERE device_id = ? AND is_monitored = 1').all(deviceId);
+    const timestamp = new Date().toISOString();
+    const updates = [];
+    const insertValue = db.prepare('INSERT INTO plc_tag_values (tag_id, value, quality, timestamp) VALUES (?, ?, ?, ?)');
+    db.transaction(() => {
+      for (const tag of tags) {
+        if (!Object.prototype.hasOwnProperty.call(telemetry, tag.tag_name)) continue;
+        const value = telemetry[tag.tag_name];
+        this.tagValues.set(tag.id, { value, quality: 'good', timestamp, source: 'plc-telemetry' });
+        insertValue.run(tag.id, String(value), 'good', timestamp);
+        updates.push({ tagId: tag.id, tagName: tag.tag_name, value, quality: 'good', unit: tag.unit, timestamp });
+      }
+    })();
+
+    device.lastResponse = frame;
+    device.lastTelemetryAt = timestamp;
+    device.lastTelemetry = { ...telemetry };
+    this._logPlcEvent('STATUS', `RX STAT: ${frame}`, null, frame);
+    this.emit('data:received', { deviceId, response: frame });
+    this.emit('plc:response', { deviceId, response: frame, timestamp });
+    this.emit('tags:updated', { deviceId, tags: updates });
+    this.emit('telemetry:updated', { deviceId, telemetry: { ...telemetry }, timestamp });
+  }
+
+  formatProtocolField(value, fieldName) {
+    const raw = String(value ?? '').trim();
+    if (!/^\d{1,4}$/.test(raw)) {
+      throw new Error(`${fieldName} must be an integer from 0 to 9999`);
+    }
+    return raw.padStart(4, '0');
+  }
+
+  formatJobCommand(productId, recipeId, targetQty) {
+    return `JOB=${this.formatProtocolField(productId, 'ProductID')},${this.formatProtocolField(recipeId, 'RecipeID')},${this.formatProtocolField(targetQty, 'TargetQty')}`;
   }
 
   normalizeCommand(commandStr) {
     const raw = String(commandStr || '').trim().toUpperCase();
-    if (raw.startsWith('MOVE=')) {
-      return this.formatMoveCommand(raw.split('=')[1]);
+    if (raw.startsWith('JOB=')) {
+      const fields = raw.slice(4).split(',');
+      if (fields.length !== 3) throw new Error('JOB requires ProductID, RecipeID, TargetQty');
+      return this.formatJobCommand(fields[0], fields[1], fields[2]);
     }
+    if (raw === 'START' || raw === 'START=0000') return 'START=0000';
     if (raw === 'STOP' || raw === 'STOP=0000') return 'STOP=0000';
-    if (raw === 'ZERO' || raw === 'HOME' || raw === 'ZERO=0000') return 'ZERO=0000';
-    if (/^(MOVE=\d{4}|STOP=0000|ZERO=0000)$/.test(raw)) return raw;
-    throw new Error(`Invalid Siemens TCP command: ${commandStr}. Expected MOVE=xxxx, STOP=0000, or ZERO=0000.`);
+    if (raw === 'HOME' || raw === 'HOME=0000') return 'HOME=0000';
+    if (raw === 'RESET' || raw === 'RESET=0000') return 'RESET=0000';
+    throw new Error(`Invalid Siemens TCP command: ${commandStr}. Expected JOB=PPPP,RRRR,QQQQ, START=0000, STOP=0000, HOME=0000, or RESET=0000.`);
+  }
+
+  _writeAscii(device, command) {
+    return new Promise((resolve, reject) => {
+      const socket = device.socket;
+      if (!device.connected || device.isDemo || !socket || socket.destroyed || !socket.writable) {
+        return reject(new Error(`Siemens PLC TCP socket disconnected (${device.config.ip_address}:${device.config.port})`));
+      }
+      const payload = Buffer.from(command, 'ascii');
+      socket.write(payload, (err) => {
+        if (err) return reject(new Error(`Socket write error: ${err.message}`));
+        resolve({ payload, byteLength: payload.length, hex: payload.toString('hex') });
+      });
+    });
+  }
+
+  _enqueueMachineTransaction(device, command, expectedResponse, { priority = false } = {}) {
+    return new Promise((resolve, reject) => {
+      const transaction = { kind: 'machine', command, expectedResponse, resolve, reject };
+      if (priority) device.machineQueue.unshift(transaction);
+      else device.machineQueue.push(transaction);
+      this._drainTransactions(device);
+    });
+  }
+
+  _drainTransactions(device) {
+    if (!device || device.activeTransaction) return;
+    const next = device.machineQueue.shift();
+    if (next) this._startTransaction(device, next);
+  }
+
+  _startTransaction(device, transaction) {
+    if (device.activeTransaction) throw new Error(`PLC transaction already active for ${device.config.id}`);
+    device.activeTransaction = transaction;
+    transaction.settled = false;
+    transaction.timeout = setTimeout(() => {
+      this._finishTransaction(device, transaction, new Error(`PLC ${transaction.kind} response timeout for ${transaction.command}`));
+    }, config.plc.responseTimeoutMs);
+
+    this._writeAscii(device, transaction.command).catch((err) => {
+      this._finishTransaction(device, transaction, err);
+    });
+  }
+
+  _finishTransaction(device, transaction, error = null, response = null) {
+    if (!transaction || transaction.settled || device.activeTransaction !== transaction) return false;
+    transaction.settled = true;
+    clearTimeout(transaction.timeout);
+    device.activeTransaction = null;
+    if (transaction.kind === 'status') device.statusPollPending = false;
+
+    if (error) transaction.reject(error);
+    else transaction.resolve(response);
+    this._drainTransactions(device);
+    return true;
+  }
+
+  _cancelTransactions(device, error) {
+    const active = device.activeTransaction;
+    if (active && !active.settled) {
+      active.settled = true;
+      clearTimeout(active.timeout);
+      active.reject(error);
+    }
+    device.activeTransaction = null;
+    device.statusPollPending = false;
+    for (const queued of device.machineQueue.splice(0)) queued.reject(error);
+  }
+
+  _resolveAckTransaction(deviceId, ack) {
+    const device = this.devices.get(deviceId);
+    const transaction = device?.activeTransaction;
+    if (!transaction || transaction.kind !== 'machine' || transaction.expectedResponse !== ack) {
+      logger.warn(`PLC protocol warning: unexpected ${ack}; active=${transaction ? `${transaction.kind}:${transaction.expectedResponse || transaction.command}` : 'none'}`);
+      this._logPlcEvent('ERROR', `Unexpected ${ack}; active transaction does not match`, null, ack);
+      return false;
+    }
+    return this._finishTransaction(device, transaction, null, ack);
+  }
+
+  _resolveStatusTransaction(deviceId, frame, telemetry) {
+    const device = this.devices.get(deviceId);
+    const transaction = device?.activeTransaction;
+    if (!transaction || transaction.kind !== 'status') {
+      logger.warn(`PLC protocol warning: unsolicited STAT frame for device ${deviceId}`);
+      return false;
+    }
+    return this._finishTransaction(device, transaction, null, { frame, telemetry });
   }
 
   async sendCommand(deviceId, commandStr) {
     const trimmedCmd = this.normalizeCommand(commandStr);
+    const isJobCommand = trimmedCmd.startsWith('JOB=');
     const device = this._resolveDevice(deviceId);
     if (!device) {
       throw new Error('No Siemens PLC device registered');
@@ -244,7 +485,9 @@ class SiemensPlcService extends EventEmitter {
 
     // Only simulated when the session itself is a DEMO fallback (not when DEMO_MODE is on but TCP is actually up)
     if (device.isDemo) {
-      const simulatedResponse = `ACK ${trimmedCmd}`;
+      const simulatedResponse = trimmedCmd === 'HOME=0000'
+        ? `[DEMO] SENT ${trimmedCmd}`
+        : `ACK ${trimmedCmd}`;
       device.lastCommand = trimmedCmd;
       device.lastResponse = simulatedResponse;
       this._logPlcEvent('COMMAND', `[DEMO] TX: ${trimmedCmd} -> ${simulatedResponse}`, trimmedCmd, simulatedResponse);
@@ -261,35 +504,46 @@ class SiemensPlcService extends EventEmitter {
       return result;
     }
 
-    return new Promise((resolve, reject) => {
-      const socket = device.socket;
-      if (!socket || socket.destroyed) {
-        return reject(new Error(`Siemens PLC TCP socket disconnected (${device.config.ip_address}:${device.config.port})`));
-      }
+    const commandType = trimmedCmd.startsWith('JOB=') ? 'JOB' : trimmedCmd.split('=')[0];
+    const expectedAck = COMMAND_ACK[commandType];
+    const payload = Buffer.from(trimmedCmd, 'ascii');
+    const socket = device.socket;
+    const trace = {
+      deviceId: device.config.id,
+      ip: device.config.ip_address,
+      port: device.config.port,
+      connected: device.connected,
+      socketDestroyed: socket?.destroyed ?? true,
+      socketWritable: socket?.writable ?? false,
+      command: trimmedCmd,
+      byteLength: payload.length,
+      hex: payload.toString('hex'),
+      expectedAck,
+    };
+    if (isJobCommand) logger.info(`[PLC_JOB_TRACE] transaction queued ${JSON.stringify(trace)}`);
 
-      const payload = `${trimmedCmd}\r\n`;
-      socket.write(payload, 'utf8', (err) => {
-        if (err) {
-          logger.error(`Siemens PLC write failed: ${err.message}`);
-          this._logPlcEvent('ERROR', `TX failed ${trimmedCmd}: ${err.message}`, trimmedCmd);
-          return reject(new Error(`Socket write error: ${err.message}`));
-        }
-
-        device.lastCommand = trimmedCmd;
-        const response = `SENT ${trimmedCmd}`;
-        this._logPlcEvent('COMMAND', `TX: ${trimmedCmd}`, trimmedCmd, response);
-        this._applyCommandedState(device.config.id, trimmedCmd);
-        const result = {
-          success: true,
-          deviceId: device.config.id,
-          command: trimmedCmd,
-          response,
-          mode: 'REAL',
-          timestamp: new Date().toISOString(),
-        };
-        this.emit('command:sent', result);
-        resolve(result);
-      });
+    return this._enqueueMachineTransaction(device, trimmedCmd, expectedAck, { priority: trimmedCmd === 'STOP=0000' }).then((ack) => {
+      if (isJobCommand) logger.info(`[PLC_JOB_TRACE] transaction acknowledged deviceId=${device.config.id} command=${trimmedCmd} ack=${ack}`);
+      device.lastCommand = trimmedCmd;
+      this._logPlcEvent('COMMAND', `TX acknowledged: ${trimmedCmd}`, trimmedCmd, ack);
+      const result = {
+        success: true,
+        deviceId: device.config.id,
+        command: trimmedCmd,
+        byteLength: payload.length,
+        hex: payload.toString('hex'),
+        writeStatus: 'ACKNOWLEDGED',
+        response: ack,
+        mode: 'REAL',
+        timestamp: new Date().toISOString(),
+      };
+      this.emit('command:sent', result);
+      return result;
+    }).catch((err) => {
+      if (isJobCommand) logger.error(`[PLC_JOB_TRACE] transaction failed deviceId=${device.config.id} error=${err.message}`);
+      logger.error(`Siemens PLC transaction failed: ${err.message}`);
+      this._logPlcEvent('ERROR', `TX failed ${trimmedCmd}: ${err.message}`, trimmedCmd);
+      throw err;
     });
   }
 
@@ -298,16 +552,24 @@ class SiemensPlcService extends EventEmitter {
     return Array.from(this.devices.values())[0] || null;
   }
 
-  async sendMove(deviceId, revs) {
-    return this.sendCommand(deviceId, this.formatMoveCommand(revs));
+  async sendJob(deviceId, productId, recipeId, targetQty) {
+    return this.sendCommand(deviceId, this.formatJobCommand(productId, recipeId, targetQty));
+  }
+
+  async sendStart(deviceId) {
+    return this.sendCommand(deviceId, 'START=0000');
   }
 
   async sendStop(deviceId) {
     return this.sendCommand(deviceId, 'STOP=0000');
   }
 
-  async sendZero(deviceId) {
-    return this.sendCommand(deviceId, 'ZERO=0000');
+  async sendHome(deviceId) {
+    return this.sendCommand(deviceId, 'HOME=0000');
+  }
+
+  async sendReset(deviceId) {
+    return this.sendCommand(deviceId, 'RESET=0000');
   }
 
   /**
@@ -316,22 +578,24 @@ class SiemensPlcService extends EventEmitter {
    */
   _applyCommandedState(deviceId, command) {
     const db = getDb();
-    const tags = db.prepare('SELECT * FROM plc_tags WHERE device_id = ?').all(deviceId);
+    const tags = db.prepare('SELECT * FROM plc_tags WHERE device_id = ? AND is_monitored = 1').all(deviceId);
     const ts = new Date().toISOString();
 
     for (const tag of tags) {
       let val = undefined;
-      if (command.startsWith('MOVE=')) {
+      if (command.startsWith('JOB=')) {
+        const [productId, recipeId, targetQty] = command.slice(4).split(',').map(Number);
+        if (tag.tag_name === 'JobLoaded') val = true;
+        if (tag.tag_name === 'ProductID') val = productId;
+        if (tag.tag_name === 'RecipeID') val = recipeId;
+        if (tag.tag_name === 'TargetQty') val = targetQty;
+      } else if (command === 'START=0000') {
         if (tag.tag_name === 'MachineRunning') val = true;
-        if (tag.tag_name === 'TargetRevs') val = parseInt(command.split('=')[1], 10) || 0;
-        if (tag.tag_name === 'MotorSpeed') val = 600;
       } else if (command === 'STOP=0000') {
         if (tag.tag_name === 'MachineRunning') val = false;
-        if (tag.tag_name === 'MotorSpeed') val = 0;
-      } else if (command === 'ZERO=0000') {
+      } else if (command === 'RESET=0000') {
         if (tag.tag_name === 'MachineRunning') val = false;
-        if (tag.tag_name === 'MotorSpeed') val = 0;
-        if (tag.tag_name === 'ProductionCount') val = 0;
+        if (tag.tag_name === 'JobLoaded') val = false;
       }
 
       if (val !== undefined) {
@@ -351,6 +615,49 @@ class SiemensPlcService extends EventEmitter {
       unit: t.unit,
       timestamp: ts,
     })) });
+  }
+
+  _startStatusPolling(deviceId) {
+    this._stopStatusPolling(deviceId);
+    const device = this.devices.get(deviceId);
+    if (!device?.connected || device.isDemo) return;
+
+    const timer = setInterval(() => {
+      const current = this.devices.get(deviceId);
+      if (!current?.connected || current.isDemo || current.activeTransaction || current.machineQueue.length > 0 || current.statusPollPending) return;
+      this._requestStatusTransaction(current)
+        .then(() => {
+          logger.debug(`PLC STATUS transaction completed: deviceId=${deviceId}`);
+        })
+        .catch((err) => {
+          logger.warn(`PLC STATUS transaction failed [${current.config.name}]: ${err.message}`);
+        });
+    }, config.plc.statusPollMs);
+    this.statusPollTimers.set(deviceId, timer);
+  }
+
+  _requestStatusTransaction(device) {
+    if (!device?.connected || device.isDemo || device.activeTransaction || device.machineQueue.length > 0 || device.statusPollPending) {
+      return Promise.resolve({ skipped: true });
+    }
+    device.statusPollPending = true;
+    return new Promise((resolve, reject) => {
+      this._startTransaction(device, {
+        kind: 'status',
+        command: STATUS_REQUEST,
+        expectedResponse: 'STAT',
+        resolve,
+        reject,
+      });
+    });
+  }
+
+  _stopStatusPolling(deviceId) {
+    const timer = this.statusPollTimers.get(deviceId);
+    if (timer) clearInterval(timer);
+    this.statusPollTimers.delete(deviceId);
+    const device = this.devices.get(deviceId);
+    if (device) device.statusPollPending = false;
   }
 
   _startDemoHeartbeat(deviceId) {
@@ -407,67 +714,111 @@ class SiemensPlcService extends EventEmitter {
   }
 
   async writeTag(deviceId, tagId, value) {
-    const device = this._resolveDevice(deviceId);
-    if (!device || !device.connected) {
-      throw new Error(`Siemens PLC device ${deviceId} is not connected`);
-    }
-
-    const db = getDb();
-    const tag = db.prepare('SELECT * FROM plc_tags WHERE id = ? AND device_id = ?').get(tagId, device.config.id);
-    if (!tag) throw new Error(`Tag ${tagId} not found`);
-
-    if (tag.tag_name === 'TargetRevs') {
-      return this.sendMove(device.config.id, value);
-    }
-    if (tag.tag_name === 'MachineRunning') {
-      const on = value === true || value === 'true' || value === 1 || value === '1';
-      if (on) {
-        const revsTag = db.prepare("SELECT * FROM plc_tags WHERE device_id = ? AND tag_name = 'TargetRevs'").get(device.config.id);
-        const current = revsTag ? this.tagValues.get(revsTag.id) : null;
-        const revs = current?.value || 1000;
-        return this.sendMove(device.config.id, revs);
-      }
-      return this.sendStop(device.config.id);
-    }
-
-    throw new Error('Siemens S7-1200 TCP Socket only supports MOVE=xxxx, STOP=0000, ZERO=0000');
+    throw new Error(`Direct tag writes are disabled for PLC ${deviceId || ''}; use the JOB/START/STOP/HOME/RESET commands`);
   }
 
   getTagValues(deviceId) {
     const db = getDb();
-    const tags = db.prepare('SELECT * FROM plc_tags WHERE device_id = ?').all(deviceId);
-    return tags.map(tag => ({
-      ...tag,
-      currentValue: this.tagValues.get(tag.id) || { value: this._getDefaultTagValue(tag), quality: 'unknown' },
-    }));
+    const tags = db.prepare(`
+      SELECT * FROM plc_tags
+      WHERE device_id = ? AND is_monitored = 1
+      ORDER BY CASE tag_name
+        WHEN 'MachineState' THEN 1 WHEN 'JobLoaded' THEN 2 WHEN 'ProductID' THEN 3
+        WHEN 'RecipeID' THEN 4 WHEN 'TargetQty' THEN 5 WHEN 'MachineReady' THEN 6
+        WHEN 'MachineRunning' THEN 7 WHEN 'MachineFault' THEN 8 WHEN 'FaultCode' THEN 9
+        WHEN 'AxisReady' THEN 10 WHEN 'MoveBusy' THEN 11 WHEN 'HaltBusy' THEN 12
+        WHEN 'AxisPositioning' THEN 13 WHEN 'HomeBusy' THEN 14 WHEN 'MotionState' THEN 15
+        ELSE 100 END, tag_name
+    `).all(deviceId);
+    const telemetryState = this.getTelemetrySnapshot(deviceId);
+    return tags.map(tag => {
+      const current = this.tagValues.get(tag.id);
+      const currentValue = !current
+        ? { value: null, quality: 'unknown', source: 'no-telemetry' }
+        : telemetryState?.telemetryFresh
+          ? current
+          : { ...current, quality: 'stale' };
+      return { ...tag, currentValue };
+    });
   }
 
   getDeviceStatus(deviceId) {
     const device = this.devices.get(deviceId);
     if (!device) return null;
+    const telemetryState = this.getTelemetrySnapshot(deviceId);
     return {
       deviceId,
       connected: device.connected,
+      tcpConnected: device.connected,
       isDemo: device.isDemo,
       mode: device.isDemo ? 'DEMO' : (device.connected ? 'REAL' : 'OFFLINE'),
       lastCommand: device.lastCommand,
       lastResponse: device.lastResponse,
+      lastTelemetryAt: device.lastTelemetryAt,
+      telemetryAgeMs: telemetryState?.telemetryAgeMs ?? null,
+      telemetryFresh: telemetryState?.telemetryFresh ?? false,
+      telemetryHealthy: telemetryState?.telemetryHealthy ?? false,
       config: device.config,
     };
   }
 
-  getAllStatuses() {
-    return Array.from(this.devices.entries()).map(([id, device]) => ({
-      deviceId: id,
-      name: device.config.name,
-      ip: device.config.ip_address,
-      port: device.config.port,
+  getTelemetrySnapshot(deviceId, now = Date.now()) {
+    const device = this.devices.get(deviceId);
+    if (!device) return null;
+    const lastStatAt = device.lastTelemetryAt;
+    const parsed = lastStatAt ? new Date(lastStatAt).getTime() : NaN;
+    const telemetryAgeMs = Number.isFinite(parsed) ? Math.max(0, now - parsed) : null;
+    const telemetryFresh = device.connected && !device.isDemo && telemetryAgeMs !== null
+      && telemetryAgeMs <= config.plc.telemetryFreshMs;
+    return {
+      deviceId,
       connected: device.connected,
+      tcpConnected: device.connected,
       isDemo: device.isDemo,
       mode: device.isDemo ? 'DEMO' : (device.connected ? 'REAL' : 'OFFLINE'),
-      lastCommand: device.lastCommand,
-      protocol: 's7-tcp',
-    }));
+      lastStatAt,
+      telemetryAgeMs,
+      telemetryFresh,
+      telemetryHealthy: telemetryFresh && Boolean(device.lastTelemetry),
+      telemetry: telemetryFresh && device.lastTelemetry ? { ...device.lastTelemetry } : null,
+      staleTelemetry: !telemetryFresh && device.lastTelemetry ? { ...device.lastTelemetry } : null,
+    };
+  }
+
+  waitForTelemetryAfter(deviceId, afterTimestamp, timeoutMs = config.plc.telemetryFreshMs) {
+    const after = new Date(afterTimestamp).getTime();
+    const current = this.getTelemetrySnapshot(deviceId);
+    if (current?.telemetryFresh && new Date(current.lastStatAt).getTime() > after) return Promise.resolve(current);
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.removeListener('telemetry:updated', onTelemetry);
+      };
+      const onTelemetry = (event) => {
+        if (event.deviceId !== deviceId || new Date(event.timestamp).getTime() <= after) return;
+        cleanup();
+        resolve(this.getTelemetrySnapshot(deviceId));
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('telemetry_confirmation_timeout'));
+      }, timeoutMs);
+      this.on('telemetry:updated', onTelemetry);
+    });
+  }
+
+  getAllStatuses() {
+    return Array.from(this.devices.entries()).map(([id, device]) => {
+      const telemetryState = this.getTelemetrySnapshot(id);
+      return {
+        deviceId: id,name: device.config.name,ip: device.config.ip_address,port: device.config.port,
+        connected: device.connected,tcpConnected: device.connected,isDemo: device.isDemo,
+        mode: device.isDemo ? 'DEMO' : (device.connected ? 'REAL' : 'OFFLINE'),lastCommand: device.lastCommand,
+        lastTelemetryAt: device.lastTelemetryAt,telemetryAgeMs: telemetryState?.telemetryAgeMs ?? null,
+        telemetryFresh: telemetryState?.telemetryFresh ?? false,telemetryHealthy: telemetryState?.telemetryHealthy ?? false,
+        protocol: 's7-tcp',
+      };
+    });
   }
 
   _updateDeviceStatus(deviceId, status) {
@@ -501,9 +852,11 @@ class SiemensPlcService extends EventEmitter {
     logger.info('Shutting down Siemens PLC service...');
 
     for (const timer of this.pollTimers.values()) clearInterval(timer);
+    for (const timer of this.statusPollTimers.values()) clearInterval(timer);
     for (const timer of this.reconnectTimers.values()) clearTimeout(timer);
 
     for (const [id, device] of this.devices.entries()) {
+      this._cancelTransactions(device, new Error('PLC service shutting down'));
       if (device.socket) {
         try { device.socket.destroy(); } catch { /* ignore */ }
       }
@@ -512,6 +865,7 @@ class SiemensPlcService extends EventEmitter {
 
     this.devices.clear();
     this.pollTimers.clear();
+    this.statusPollTimers.clear();
     this.reconnectTimers.clear();
     logger.info('Siemens PLC service shut down complete');
   }

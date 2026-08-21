@@ -1,5 +1,8 @@
 <template>
   <div>
+    <div v-if="loadError" class="card mb-4" style="border-color: var(--color-danger)">
+      <div class="text-danger text-sm">Unable to load dashboard: {{ loadError }}</div>
+    </div>
     <!-- Stats Row -->
     <div class="grid grid-4" style="margin-bottom: var(--space-6)">
       <div class="stat-card" v-for="stat in stats" :key="stat.label">
@@ -15,26 +18,26 @@
       <!-- PLC Device Status -->
       <div class="card">
         <div class="card-header">
-          <h3 class="card-title">🔌 Trạng thái PLC</h3>
+          <h3 class="card-title">🔌 Machine Status</h3>
           <div class="flex gap-2 items-center">
             <div class="status-dot" :class="plcStore.wsConnected ? 'online' : 'offline'"></div>
             <span class="text-xs text-muted">{{ plcStore.wsConnected ? 'WebSocket Live' : 'Offline' }}</span>
           </div>
         </div>
 
-        <div v-if="devices.length === 0" class="empty-state">
+        <div v-if="!loadError && devices.length === 0" class="empty-state">
           <span>🔌</span>
-          <p>Chưa có PLC nào được cấu hình</p>
+          <p>No PLC devices configured</p>
         </div>
 
         <div v-for="device in devices" :key="device.id" class="device-row" v-else>
-          <div class="status-dot" :class="device.liveStatus?.isDemo ? 'warning' : (device.connection_status === 'connected' ? 'online' : 'offline')"></div>
+          <div class="status-dot" :class="device.liveStatus?.isDemo ? 'warning' : (isDeviceOnline(device) ? 'online' : 'offline')"></div>
           <div class="device-info">
             <span class="font-medium text-sm">{{ device.name }}</span>
             <span class="text-xs text-muted">{{ device.ip_address }}:{{ device.port }} · {{ device.protocol || 's7-tcp' }}</span>
           </div>
-          <div class="badge" :class="device.liveStatus?.isDemo ? 'badge-warning' : (device.connection_status === 'connected' ? 'badge-success' : 'badge-danger')">
-            {{ device.liveStatus?.isDemo ? 'DEMO / SIMULATED' : (device.connection_status === 'connected' ? 'Kết nối' : 'Mất kết nối') }}
+          <div class="badge" :class="device.liveStatus?.isDemo ? 'badge-warning' : (isDeviceOnline(device) ? 'badge-success' : 'badge-danger')">
+            {{ device.liveStatus?.isDemo ? 'Demo / Simulated' : (isDeviceOnline(device) ? 'Real / Online' : 'Real / Offline') }}
           </div>
         </div>
       </div>
@@ -42,13 +45,13 @@
       <!-- Recent Alarms -->
       <div class="card">
         <div class="card-header">
-          <h3 class="card-title">⚠️ Cảnh báo gần đây</h3>
+          <h3 class="card-title">⚠️ Recent Alerts</h3>
           <span class="badge badge-danger" v-if="plcStore.alarms.length > 0">{{ plcStore.alarms.length }}</span>
         </div>
 
         <div v-if="plcStore.alarms.length === 0" class="empty-state">
           <span>✅</span>
-          <p class="text-success">Không có cảnh báo</p>
+          <p class="text-success">No active alerts</p>
         </div>
 
         <div v-for="alarm in plcStore.alarms.slice(0, 6)" :key="alarm.id" class="alarm-row">
@@ -64,7 +67,7 @@
       <!-- Live Tag Values -->
       <div class="card">
         <div class="card-header">
-          <h3 class="card-title">📊 Giá trị Tag thời gian thực</h3>
+          <h3 class="card-title">📊 Realtime Tags</h3>
           <span class="text-xs text-muted text-mono">{{ updateCount }} updates</span>
         </div>
 
@@ -85,23 +88,23 @@
       <!-- Recent Print Jobs -->
       <div class="card">
         <div class="card-header">
-          <h3 class="card-title">🖨️ Lệnh in gần đây</h3>
-          <router-link to="/printer" class="btn btn-ghost btn-sm">Xem tất cả →</router-link>
+          <h3 class="card-title">🖨️ Recent Print Jobs</h3>
+          <router-link to="/printer" class="btn btn-ghost btn-sm">View All →</router-link>
         </div>
 
         <div v-if="recentJobs.length === 0" class="empty-state">
           <span>🖨️</span>
-          <p>Chưa có lệnh in nào</p>
+          <p>No print jobs</p>
         </div>
 
         <div class="table-container" v-else>
           <table class="table">
             <thead>
               <tr>
-                <th>Tên job</th>
+                <th>Job Name</th>
                 <th>Printer</th>
-                <th>Trạng thái</th>
-                <th>Thời gian</th>
+                <th>Status</th>
+                <th>Created At</th>
               </tr>
             </thead>
             <tbody>
@@ -109,7 +112,7 @@
                 <td class="text-sm">{{ job.job_name }}</td>
                 <td class="text-sm text-muted">{{ job.printer_name || 'N/A' }}</td>
                 <td>
-                  <span class="badge" :class="getPrintJobMode(job) === 'DEMO' && job.status === 'completed' ? 'badge-warning' : getJobStatusClass(job.status)">{{ getPrintJobMode(job) === 'DEMO' && job.status === 'completed' ? 'DEMO COMPLETED' : job.status }}</span>
+                  <span class="badge" :class="isDemoCompletedJob(job) ? 'badge-warning' : getPrintJobStatusClass(job.status)">{{ isDemoCompletedJob(job) ? `DEMO · ${getPrintJobStatusLabel(job.status)}` : getPrintJobStatusLabel(job.status) }}</span>
                 </td>
                 <td class="text-xs text-muted text-mono">{{ formatTime(job.created_at) }}</td>
               </tr>
@@ -125,38 +128,42 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { usePlcStore } from '@/stores/plc'
 import api from '@/composables/useApi'
+import { getPrintJobStatusClass, getPrintJobStatusLabel, normalizePrintJobStatus } from '@/utils/printJobStatus'
 
 const plcStore = usePlcStore()
 const devices = ref([])
 const recentJobs = ref([])
 const updateCount = ref(0)
+const loadError = ref('')
 
 const stats = computed(() => [
   {
     icon: '🔌',
-    value: `${devices.value.filter(d => d.connection_status === 'connected' && !d.liveStatus?.isDemo).length}/${devices.value.length}`,
-    label: 'PLC Kết nối',
+    value: loadError.value && devices.value.length === 0
+      ? '—/—'
+      : `${devices.value.filter(d => d.connection_status === 'connected' && !d.liveStatus?.isDemo).length}/${devices.value.length}`,
+    label: 'PLC / Line Status',
     color: 'success',
     textColor: 'success',
   },
   {
     icon: '⚠️',
     value: plcStore.alarms.filter(a => !a.resolved).length,
-    label: 'Cảnh báo',
+    label: 'Alerts',
     color: 'warning',
     textColor: 'warning',
   },
   {
     icon: '🖨️',
-    value: recentJobs.value.filter(j => j.status === 'completed').length,
-    label: 'Lệnh in hôm nay',
+    value: recentJobs.value.filter(j => normalizePrintJobStatus(j.status) === 'completed').length,
+    label: 'Print Jobs Today',
     color: 'brand',
     textColor: 'brand',
   },
   {
     icon: '📷',
     value: Object.keys(plcStore.tagValues).length,
-    label: 'Tags đang theo dõi',
+    label: 'Realtime Tags',
     color: 'brand',
     textColor: 'primary',
   },
@@ -174,6 +181,7 @@ watch(() => plcStore.tagValues, () => {
 }, { deep: true })
 
 async function loadData() {
+  loadError.value = ''
   try {
     const [devRes, jobRes] = await Promise.all([
       api.get('/plc/devices'),
@@ -183,12 +191,13 @@ async function loadData() {
     recentJobs.value = jobRes.data.data || []
   } catch (err) {
     console.error('Dashboard load error:', err)
+    loadError.value = err.response?.data?.error || err.message || 'Unable to load data'
   }
 }
 
 function formatTime(ts) {
   if (!ts) return '-'
-  return new Date(ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  return new Date(ts).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
 function formatTagValue(tagData) {
@@ -200,32 +209,34 @@ function formatTagValue(tagData) {
 }
 
 function getTagValueClass(tagData) {
+  if (areRealDevicesOffline()) return 'text-muted'
   if (typeof tagData.value === 'boolean') {
     return tagData.value ? 'text-success' : 'text-muted'
   }
   return 'text-brand'
 }
 
+function isDeviceOnline(device) {
+  if (device.liveStatus) return !device.liveStatus.isDemo && device.liveStatus.connected === true
+  return device.connection_status === 'connected'
+}
+
+function areRealDevicesOffline() {
+  return devices.value.length > 0 && !devices.value.some(isDeviceOnline) && !devices.value.some(device => device.liveStatus?.isDemo)
+}
+
 function getTagQuality(tagData) {
   if (devices.value.some(device => device.liveStatus?.isDemo)) return 'DEMO'
+  if (areRealDevicesOffline()) return tagData.value === null || tagData.value === undefined ? 'OFFLINE' : 'OFFLINE / LAST VALUE'
   return String(tagData.quality || 'unknown').toUpperCase()
 }
 
 function getTagQualityClass(tagData) {
   const quality = getTagQuality(tagData)
   if (quality === 'DEMO') return 'text-warning'
+  if (quality.startsWith('OFFLINE')) return 'text-danger'
   if (quality === 'GOOD') return 'text-success'
   return 'text-muted'
-}
-
-function getJobStatusClass(status) {
-  const map = {
-    completed: 'badge-success',
-    failed: 'badge-danger',
-    printing: 'badge-warning',
-    pending: 'badge-neutral',
-  }
-  return map[status] || 'badge-neutral'
 }
 
 function getPrintJobMode(job) {
@@ -234,6 +245,10 @@ function getPrintJobMode(job) {
   } catch {
     return 'UNKNOWN'
   }
+}
+
+function isDemoCompletedJob(job) {
+  return getPrintJobMode(job) === 'DEMO' && normalizePrintJobStatus(job.status) === 'completed'
 }
 
 onMounted(loadData)

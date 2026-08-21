@@ -9,14 +9,14 @@
         <!-- Logo & Title -->
         <div class="login-header">
           <div class="login-logo">⚡</div>
-          <h1 class="login-title">PLC Web Control</h1>
-          <p class="login-subtitle">Hệ thống điều khiển PLC, máy in & scanner</p>
+          <h1 class="login-title">PLC Web Control System</h1>
+          <p class="login-subtitle">PLC control, print queue & barcode scanning</p>
         </div>
 
         <!-- Form -->
         <form class="login-form" @submit.prevent="handleLogin">
           <div class="form-group">
-            <label class="form-label" for="username">Tên đăng nhập</label>
+            <label class="form-label" for="username">Username</label>
             <div class="input-with-icon">
               <span class="input-icon">👤</span>
               <input
@@ -33,7 +33,7 @@
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="password">Mật khẩu</label>
+            <label class="form-label" for="password">Password</label>
             <div class="input-with-icon">
               <span class="input-icon">🔒</span>
               <input
@@ -59,7 +59,7 @@
 
           <button type="submit" class="btn btn-primary w-full btn-login" :disabled="isLoading">
             <div v-if="isLoading" class="spinner"></div>
-            <span>{{ isLoading ? 'Đang đăng nhập...' : 'Đăng nhập' }}</span>
+            <span>{{ isLoading ? 'Signing in...' : 'Sign In' }}</span>
           </button>
         </form>
 
@@ -71,8 +71,8 @@
               <span class="sys-val text-success">Siemens S7-1200 TCP</span>
             </div>
             <div class="sys-info-item">
-              <span class="sys-label">Máy in</span>
-              <span class="sys-val text-warning">Godex Printer</span>
+              <span class="sys-label">Printer</span>
+              <span class="sys-val text-warning">Print Queue</span>
             </div>
             <div class="sys-info-item">
               <span class="sys-label">Scanner</span>
@@ -109,7 +109,7 @@ async function handleLogin() {
     const redirect = route.query.redirect || '/dashboard'
     router.push(redirect)
   } catch (err) {
-    error.value = err.response?.data?.error || 'Đăng nhập thất bại. Kiểm tra lại thông tin.'
+    error.value = err.response?.data?.error || 'Invalid username or password.'
   } finally {
     isLoading.value = false
   }
@@ -129,7 +129,7 @@ async function handleLogin() {
 .login-bg {
   position: absolute;
   inset: 0;
-  background: radial-gradient(ellipse at 30% 40%, hsl(210, 50%, 12%) 0%, var(--color-bg-primary) 60%);
+  background: radial-gradient(ellipse at 30% 40%, #dbeafe 0%, var(--color-bg-primary) 62%);
 }
 
 /* Subtle grid background */
@@ -137,8 +137,8 @@ async function handleLogin() {
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(hsl(220, 15%, 22% / 0.3) 1px, transparent 1px),
-    linear-gradient(90deg, hsl(220, 15%, 22% / 0.3) 1px, transparent 1px);
+    linear-gradient(rgb(148 163 184 / 0.2) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(148 163 184 / 0.2) 1px, transparent 1px);
   background-size: 40px 40px;
   mask-image: radial-gradient(ellipse at center, black 40%, transparent 80%);
 }
@@ -156,7 +156,7 @@ async function handleLogin() {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-xl);
   padding: var(--space-10) var(--space-8);
-  box-shadow: var(--shadow-lg), 0 0 60px hsl(210, 80%, 40% / 0.1);
+  box-shadow: var(--shadow-lg);
 }
 
 .login-header {
@@ -168,14 +168,14 @@ async function handleLogin() {
   width: 64px;
   height: 64px;
   background: var(--color-brand-dim);
-  border: 2px solid hsl(210, 60%, 30%);
+  border: 2px solid #93c5fd;
   border-radius: var(--radius-lg);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 2rem;
   margin: 0 auto var(--space-4);
-  box-shadow: 0 0 30px hsl(210, 90%, 55% / 0.2);
+  box-shadow: var(--shadow-sm);
 }
 
 .login-title {

@@ -112,20 +112,34 @@ async function stopJob(req, res) {
   }
 }
 
-/**
- * POST /api/jobs/:id/home
- */
 async function homeJob(req, res) {
   try {
     const { id } = req.params;
     const { deviceId } = req.body;
-
     const result = await workflowService.homeJob(id, deviceId);
+    createAuditLog({ userId: req.user.id, username: req.user.username, action: 'HOME_JOB',
+      resource: 'production_jobs', resourceId: id, details: { deviceId }, req });
+    res.json({ success: true, data: result });
+  } catch (err) {
+    logger.error('Home job error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+/**
+ * POST /api/jobs/:id/reset
+ */
+async function resetJob(req, res) {
+  try {
+    const { id } = req.params;
+    const { deviceId } = req.body;
+
+    const result = await workflowService.resetJob(id, deviceId);
 
     createAuditLog({
       userId: req.user.id,
       username: req.user.username,
-      action: 'HOME_JOB',
+      action: 'RESET_JOB',
       resource: 'production_jobs',
       resourceId: id,
       details: { deviceId },
@@ -134,7 +148,7 @@ async function homeJob(req, res) {
 
     res.json({ success: true, data: result });
   } catch (err) {
-    logger.error('Home job error:', err);
+    logger.error('Reset job error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 }
@@ -202,4 +216,4 @@ function getProductionLogs(req, res) {
   }
 }
 
-module.exports = { getJobs, getActiveJob, startJob, stopJob, homeJob, printJob, getProductionLogs };
+module.exports = { getJobs, getActiveJob, startJob, stopJob, homeJob, resetJob, printJob, getProductionLogs };

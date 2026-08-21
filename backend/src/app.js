@@ -1,4 +1,3 @@
-require('dotenv').config();
 const http = require('http');
 const express = require('express');
 const cors = require('cors');
@@ -12,6 +11,7 @@ const fs = require('fs');
 const config = require('./config');
 const logger = require('./config/logger');
 const { initDb } = require('./models/initDb');
+const { getDb } = require('./models/database');
 const { initWebSocket } = require('./websocket/wsHandler');
 const plcService = require('./services/plc/plcService');
 const printerService = require('./services/printer/printerService');
@@ -23,6 +23,7 @@ const printerRoutes = require('./routes/printerRoutes');
 const scannerRoutes = require('./routes/scannerRoutes');
 const productRoutes = require('./routes/productRoutes');
 const jobRoutes = require('./routes/jobRoutes');
+const documentTraceRoutes = require('./routes/documentTraceRoutes');
 
 // ============================================================
 // Express App Setup
@@ -42,6 +43,7 @@ app.use(cors({
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
+  exposedHeaders: ['Content-Disposition', 'X-Trace-Code', 'X-Document-SHA256'],
 }));
 
 // Compression
@@ -57,18 +59,28 @@ app.use(morgan('combined', {
   skip: (req) => req.url === '/api/health',
 }));
 
-// Rate limiting
-const limiter = rateLimit({
+// Rate limiting: reads support dashboard polling; authentication and mutations
+// retain tighter, independent limits.
+const limiterMessage = { success: false, error: 'Too many requests, please try again later' };
+const createLimiter = (max, skip) => rateLimit({
   windowMs: config.rateLimit.windowMs,
-  max: config.rateLimit.max,
-  message: { success: false, error: 'Too many requests, please try again later' },
+  max,
+  skip,
+  message: limiterMessage,
   standardHeaders: true,
   legacyHeaders: false,
 });
-app.use('/api/', limiter);
+const readLimiter = createLimiter(config.rateLimit.readMax, (req) => req.method !== 'GET');
+const writeLimiter = createLimiter(config.rateLimit.writeMax, (req) => req.method === 'GET');
+const authLimiter = createLimiter(config.rateLimit.authMax);
+
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/refresh', authLimiter);
+app.use('/api/', readLimiter);
+app.use('/api/', writeLimiter);
 
 // Static files (scanned images, uploads)
-const uploadsPath = path.resolve('./uploads');
+const uploadsPath = config.paths.uploads;
 if (!fs.existsSync(uploadsPath)) fs.mkdirSync(uploadsPath, { recursive: true });
 app.use('/uploads', express.static(uploadsPath));
 
@@ -81,14 +93,23 @@ app.use('/api/printers', printerRoutes);
 app.use('/api/scanner', scannerRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/jobs', jobRoutes);
+app.use('/api/document-traces', documentTraceRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   const plcStatuses = plcService.getAllStatuses();
+  let databaseStatus = 'ok';
+  try {
+    getDb().prepare('SELECT 1').get();
+  } catch {
+    databaseStatus = 'error';
+  }
   res.json({
     success: true,
     status: 'healthy',
     timestamp: new Date().toISOString(),
+    uptimeSeconds: Math.floor(process.uptime()),
+    database: { status: databaseStatus },
     version: '1.0.0',
     demoMode: config.demoMode,
     plc: {
@@ -108,10 +129,11 @@ app.get('/api/health', (req, res) => {
 
 // Serve Vue SPA in production
 if (config.server.env === 'production') {
-  const frontendDist = path.resolve('../frontend/dist');
+  const frontendDist = config.paths.frontendDist;
   if (fs.existsSync(frontendDist)) {
     app.use(express.static(frontendDist));
-    app.get('*', (req, res) => {
+    app.get('*', (req, res, next) => {
+      if (req.path === '/api' || req.path.startsWith('/api/') || req.path === '/ws' || req.path.startsWith('/ws/')) return next();
       res.sendFile(path.join(frontendDist, 'index.html'));
     });
     logger.info('Serving Vue SPA from dist/');

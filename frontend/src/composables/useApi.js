@@ -7,6 +7,10 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
+// Interactive print drivers can keep a native Save As dialog open indefinitely.
+// Those requests are explicitly exempt from the general 15-second API timeout.
+export const interactivePrintRequestConfig = Object.freeze({ timeout: 0 })
+
 // Request interceptor - add auth token
 api.interceptors.request.use((config) => {
   const auth = useAuthStore()

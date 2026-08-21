@@ -65,16 +65,13 @@ async function createDevice(req, res) {
 }
 
 /**
- * POST /api/plc/command  { deviceId?, command }
- * POST /api/plc/move     { deviceId?, revs }
- * POST /api/plc/stop     { deviceId? }
- * POST /api/plc/zero     { deviceId? }
+ * PLC command endpoints use JOB / START / STOP / HOME / RESET only.
  */
 async function sendCommand(req, res) {
   try {
     const { deviceId, command } = req.body;
     if (!command) {
-      return res.status(400).json({ success: false, error: 'command is required (MOVE=xxxx | STOP=0000 | ZERO=0000)' });
+      return res.status(400).json({ success: false, error: 'command is required (JOB=PPPP,RRRR,QQQQ | START=0000 | STOP=0000 | HOME=0000 | RESET=0000)' });
     }
     const result = await plcService.sendCommand(deviceId, command);
     createAuditLog({
@@ -91,14 +88,22 @@ async function sendCommand(req, res) {
   }
 }
 
-async function sendMove(req, res) {
+async function sendJob(req, res) {
   try {
-    const { deviceId, revs } = req.body;
-    if (revs === undefined || revs === null || revs === '') {
-      return res.status(400).json({ success: false, error: 'revs is required' });
-    }
-    const result = await plcService.sendMove(deviceId, revs);
-    createAuditLog({ userId: req.user.id, username: req.user.username, action: 'PLC_MOVE', details: { revs }, req });
+    const { deviceId, productId, recipeId, targetQty } = req.body || {};
+    const result = await plcService.sendJob(deviceId, productId, recipeId, targetQty);
+    createAuditLog({ userId: req.user.id, username: req.user.username, action: 'PLC_JOB', details: { productId, recipeId, targetQty }, req });
+    res.json({ success: true, data: result });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+}
+
+async function sendStart(req, res) {
+  try {
+    const { deviceId } = req.body || {};
+    const result = await plcService.sendStart(deviceId);
+    createAuditLog({ userId: req.user.id, username: req.user.username, action: 'PLC_START', req });
     res.json({ success: true, data: result });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
@@ -116,11 +121,37 @@ async function sendStop(req, res) {
   }
 }
 
-async function sendZero(req, res) {
+/**
+ * POST /api/plc/devices/:id/home
+ * Machine-level axis homing/reference command; independent of production jobs.
+ */
+async function sendHome(req, res) {
+  const deviceId = req.params.id;
+  try {
+    const result = await plcService.sendHome(deviceId);
+    const commandResult = result.mode === 'REAL' ? 'acknowledged' : 'demo';
+    logger.info(`PLC HOME command result: deviceId=${deviceId} command=${result.command} mode=${result.mode} result=${commandResult}`);
+    createAuditLog({
+      userId: req.user.id,
+      username: req.user.username,
+      action: 'PLC_HOME',
+      resource: 'plc_devices',
+      resourceId: deviceId,
+      details: { command: result.command, mode: result.mode, result: commandResult },
+      req,
+    });
+    res.json({ success: true, data: { ...result, result: commandResult } });
+  } catch (err) {
+    logger.error(`PLC HOME command result: deviceId=${deviceId} command=HOME=0000 mode=${plcService.getDeviceStatus(deviceId)?.mode || 'OFFLINE'} result=error error=${err.message}`);
+    res.status(400).json({ success: false, error: err.message });
+  }
+}
+
+async function sendReset(req, res) {
   try {
     const { deviceId } = req.body || {};
-    const result = await plcService.sendZero(deviceId);
-    createAuditLog({ userId: req.user.id, username: req.user.username, action: 'PLC_ZERO', req });
+    const result = await plcService.sendReset(deviceId);
+    createAuditLog({ userId: req.user.id, username: req.user.username, action: 'PLC_RESET', req });
     res.json({ success: true, data: result });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
@@ -301,8 +332,10 @@ module.exports = {
   acknowledgeAlarm,
   getDashboard,
   sendCommand,
-  sendMove,
+  sendJob,
+  sendStart,
   sendStop,
-  sendZero,
+  sendHome,
+  sendReset,
   getPlcEvents,
 };

@@ -5,24 +5,43 @@ frontend/node_modules/
 
 # Environment / secrets
 .env
+.env.*
+!.env.example
+!**/.env.example
 backend/.env
 frontend/.env
 
 # Runtime database files
+backend/database/plc_system.db
+backend/database/backups/
+backend/database/*.db
+backend/database/*.db-shm
+backend/database/*.db-wal
 *.db-wal
 *.db-shm
+*.db
+*.bak
 
-# Logs
+# Logs and runtime-generated files
 logs/
+backend/logs/
+backend/tmp/
+backend/uploads/
+tmp/
+output/
 *.log
+*.pid
+*.tmp
+*.temp
+coverage/
 
 # Build output
 frontend/dist/
+
+# Export archives
+*.zip
 
 # OS / IDE
 .DS_Store
 Thumbs.db
 .vscode/
-*.db
-*.bak
-*.zip

@@ -1,4 +1,5 @@
 const EventEmitter = require('events');
+// DEPRECATED: simulation-only adapter; never reports physical print completion.
 class DemoPrinterAdapter extends EventEmitter {
   async print(printer, payload, copies) {
     const result = { accepted: true, simulated: true, mode: 'DEMO', printerId: printer.id, copies, payload };

@@ -25,7 +25,7 @@ async function printLabel(req, res) {
     const { id } = req.params;
     const { templateName, variables, copies = 1 } = req.body;
     if (!templateName) return res.status(400).json({ success: false, error: 'templateName required' });
-    const result = await printerService.printFromTemplate(id, templateName, variables || {}, copies);
+    const result = await printerService.printFromTemplate(id, templateName, variables || {}, copies, { userId: req.user.id });
 
     createAuditLog({
       userId: req.user.id, username: req.user.username,
@@ -46,8 +46,43 @@ async function printLabel(req, res) {
 async function printTest(req, res) {
   try {
     const { id } = req.params;
-    const result = await printerService.printTestLabel(id);
+    const result = await printerService.printTestLabel(id, { userId: req.user.id });
     res.json({ success: true, data: result, message: 'Test label sent to printer' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+async function getAvailableQueues(req, res) {
+  try {
+    const queues = await printerService.listAvailableQueues();
+    res.json({ success: true, data: queues });
+  } catch (err) {
+    logger.error(`Printer queue discovery failed: ${err.message}`);
+    res.status(503).json({ success: false, error: 'printer_queue_discovery_failed', details: err.message });
+  }
+}
+
+function updatePrinter(req, res) {
+  try {
+    const { queue_name, print_mode = 'WINDOWS_QUEUE', is_enabled = 1, is_default = 0 } = req.body;
+    if (!['WINDOWS_QUEUE', 'RAW_TCP_LEGACY'].includes(print_mode)) {
+      return res.status(400).json({ success: false, error: 'invalid_print_mode' });
+    }
+    if (print_mode === 'WINDOWS_QUEUE' && (!queue_name || typeof queue_name !== 'string')) {
+      return res.status(400).json({ success: false, error: 'queue_name_required' });
+    }
+    const db = getDb();
+    const existing = db.prepare('SELECT id FROM printers WHERE id=?').get(req.params.id);
+    if (!existing) return res.status(404).json({ success: false, error: 'printer_not_found' });
+    db.transaction(() => {
+      if (Number(is_default)) db.prepare('UPDATE printers SET is_default=0').run();
+      db.prepare(`UPDATE printers SET queue_name=?,print_mode=?,is_enabled=?,is_default=?,connection_status='unknown',last_error=NULL,updated_at=? WHERE id=?`)
+        .run(queue_name || null, print_mode, Number(Boolean(is_enabled)), Number(Boolean(is_default)), new Date().toISOString(), req.params.id);
+    })();
+    const printer = db.prepare('SELECT * FROM printers WHERE id=?').get(req.params.id);
+    createAuditLog({ userId: req.user.id, username: req.user.username, action: 'CONFIGURE_PRINTER_QUEUE', resource: 'printers', resourceId: req.params.id, details: { queue_name, print_mode, is_default: Boolean(is_default) }, req });
+    res.json({ success: true, data: printer });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -110,4 +145,4 @@ function createTemplate(req, res) {
   }
 }
 
-module.exports = { getPrinters, printLabel, printTest, getPrinterStatus, getJobs, getTemplates, createTemplate };
+module.exports = { getPrinters, getAvailableQueues, updatePrinter, printLabel, printTest, getPrinterStatus, getJobs, getTemplates, createTemplate };
